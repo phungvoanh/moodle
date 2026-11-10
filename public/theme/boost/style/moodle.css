@@ -46783,6 +46783,23 @@ div.editor_atto_toolbar button .icon {
 .courseindex .courseindex-section.delegated-section {
   width: 100%;
 }
+.courseindex .courseindex-section[role=treeitem].focus, .courseindex .courseindex-section[role=treeitem]:focus {
+  box-shadow: none;
+}
+.courseindex .courseindex-section[role=treeitem].focus > .courseindex-section-title, .courseindex .courseindex-section[role=treeitem]:focus > .courseindex-section-title {
+  outline: 0;
+  box-shadow: 0 0 0 0.25rem rgba(15, 108, 191, 0.75);
+}
+.courseindex li[role=treeitem]:has(> .delegated-section).focus, .courseindex li[role=treeitem]:has(> .delegated-section):focus {
+  box-shadow: none;
+}
+.courseindex li[role=treeitem]:has(> .delegated-section).focus > .delegated-section, .courseindex li[role=treeitem]:has(> .delegated-section):focus > .delegated-section {
+  box-shadow: none;
+}
+.courseindex li[role=treeitem]:has(> .delegated-section).focus > .delegated-section > .courseindex-section-title, .courseindex li[role=treeitem]:has(> .delegated-section):focus > .delegated-section > .courseindex-section-title {
+  outline: 0;
+  box-shadow: 0 0 0 0.25rem rgba(15, 108, 191, 0.75);
+}
 .courseindex .icon {
   font-size: 10px;
   margin-right: 0;
