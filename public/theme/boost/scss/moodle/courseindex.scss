@@ -255,6 +255,35 @@ $courseindex-item-current: $primary !default;
         }
     }
 
+    // Ensure section and subsection focus rings target only the title item with rounded corners.
+    .courseindex-section[role="treeitem"] {
+        &.focus,
+        &:focus {
+            box-shadow: none;
+
+            > .courseindex-section-title {
+                outline: 0;
+                box-shadow: $input-btn-focus-box-shadow;
+            }
+        }
+    }
+
+    li[role="treeitem"]:has(> .delegated-section) {
+        &.focus,
+        &:focus {
+            box-shadow: none;
+
+            > .delegated-section {
+                box-shadow: none;
+            }
+
+            > .delegated-section > .courseindex-section-title {
+                outline: 0;
+                box-shadow: $input-btn-focus-box-shadow;
+            }
+        }
+    }
+
     // General icons size.
     .icon {
         font-size: 10px;
