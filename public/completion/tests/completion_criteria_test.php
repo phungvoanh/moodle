@@ -24,6 +24,8 @@ namespace core_completion;
  * @copyright 2021 Mikhail Golenkov <mikhailgolenkov@catalyst-au.net>
  * @license   http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
  */
+#[\PHPUnit\Framework\Attributes\CoversClass(\completion_criteria::class)]
+#[\PHPUnit\Framework\Attributes\CoversClass(\completion_completion::class)]
 final class completion_criteria_test extends \advanced_testcase {
 
     /**
@@ -288,5 +290,68 @@ final class completion_criteria_test extends \advanced_testcase {
         // The course for User 2 is supposed to be marked as not completed.
         $ccompletion = new \completion_completion(['userid' => $user2->id, 'course' => $course->id]);
         $this->assertFalse($ccompletion->is_complete());
+    }
+
+    /**
+     * Test saving completion when cache holds stale negative entry and record exists in DB.
+     *
+     * @covers \completion_completion
+     */
+    public function test_save_with_stale_cache_and_existing_db_record(): void {
+        global $DB;
+
+        $sink = $this->redirectMessages();
+
+        $course = $this->getDataGenerator()->create_course(['enablecompletion' => 1]);
+        $user = $this->getDataGenerator()->create_user();
+        $studentrole = $DB->get_record('role', ['shortname' => 'student']);
+        $this->getDataGenerator()->enrol_user($user->id, $course->id, $studentrole->id);
+
+        // 1. Simulate web server negative cache hit (record does not exist yet).
+        $cache = \cache::make('core', 'coursecompletion');
+        $key = $user->id . '_' . $course->id;
+        $cache->set($key, ['value' => false]);
+
+        // 2. Simulate CLI cron task (such as completion_daily_task) inserting the record into database.
+        $now = time();
+        $dbcompletion = (object) [
+            'userid' => $user->id,
+            'course' => $course->id,
+            'timeenrolled' => $now - 3600,
+            'timestarted' => $now - 1800,
+            'timecompleted' => 0,
+            'reaggregate' => $now,
+        ];
+        $dbcompletion->id = $DB->insert_record('course_completions', $dbcompletion);
+
+        // 3. Web server loads completion object: stale negative cache results in null id.
+        $completion = new \completion_completion(['userid' => $user->id, 'course' => $course->id]);
+        $this->assertNull($completion->id);
+
+        // 4. Activity completed: trigger mark_inprogress().
+        $result = $completion->mark_inprogress();
+        $this->assertEquals($dbcompletion->id, $result);
+        $this->assertEquals($dbcompletion->id, $completion->id);
+        $this->assertEquals($now - 3600, $completion->timeenrolled);
+        $this->assertEquals($now - 1800, $completion->timestarted);
+
+        // Verify database record is updated without duplicate entry error.
+        $record = $DB->get_record('course_completions', ['id' => $dbcompletion->id]);
+        $this->assertNotEmpty($record);
+        $this->assertEquals($dbcompletion->id, $record->id);
+
+        // Verify cache now holds the valid record instead of stale false entry.
+        $cached = $cache->get($key);
+        $this->assertIsArray($cached);
+        $this->assertEquals($dbcompletion->id, $cached['value']->id);
+
+        // Verify mark_complete saves, completes, and sends message correctly.
+        $completetime = $now + 60;
+        $completion->mark_complete($completetime);
+        $record = $DB->get_record('course_completions', ['id' => $dbcompletion->id]);
+        $this->assertEquals($completetime, $record->timecompleted);
+        $messages = $sink->get_messages();
+        $this->assertCount(1, $messages);
+        $sink->close();
     }
 }

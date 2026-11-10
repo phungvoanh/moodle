@@ -170,74 +170,121 @@ class completion_completion extends data_object {
 
         // Set time complete.
         $this->timecompleted = $timecomplete;
+
         // Save record.
         if ($result = $this->_save()) {
             $data = $this->get_record_data();
             \core\event\course_completed::create_from_completion($data)->trigger();
-        }
 
-        // Notify user.
-        $course = get_course($data->course);
-        $messagesubject = get_string('coursecompleted', 'completion');
-        $options = new stdClass();
-        $options->context = context_course::instance($course->id);
-        $a = [
-            'coursename' => format_string(get_course_display_name_for_list($course), true, $options),
-            'courselink' => (string) new moodle_url('/course/view.php', array('id' => $course->id)),
-        ];
-        $messagebody = get_string('coursecompletedmessage', 'completion', $a);
-        $messageplaintext = html_to_text($messagebody);
-
-        $eventdata = new \core\message\message();
-        $eventdata->courseid          = $course->id;
-        $eventdata->component         = 'moodle';
-        $eventdata->name              = 'coursecompleted';
-        $eventdata->userfrom          = core_user::get_noreply_user();
-        $eventdata->userto            = $data->userid;
-        $eventdata->notification      = 1;
-        $eventdata->subject           = $messagesubject;
-        $eventdata->fullmessage       = $messageplaintext;
-        $eventdata->fullmessageformat = FORMAT_HTML;
-        $eventdata->fullmessagehtml   = $messagebody;
-        $eventdata->smallmessage      = $messageplaintext;
-
-        if ($courseimage = \core_course\external\course_summary_exporter::get_course_image($course)) {
-            $eventdata->customdata  = [
-                'notificationpictureurl' => $courseimage,
+            // Notify user.
+            $course = get_course($data->course);
+            $messagesubject = get_string('coursecompleted', 'completion');
+            $options = new stdClass();
+            $options->context = context_course::instance($course->id);
+            $a = [
+                'coursename' => format_string(get_course_display_name_for_list($course), true, $options),
+                'courselink' => (string) new moodle_url('/course/view.php', ['id' => $course->id]),
             ];
-        }
-        message_send($eventdata);
+            $messagebody = get_string('coursecompletedmessage', 'completion', $a);
+            $messageplaintext = html_to_text($messagebody);
 
-        return $result;
+            $eventdata = new \core\message\message();
+            $eventdata->courseid          = $course->id;
+            $eventdata->component         = 'moodle';
+            $eventdata->name              = 'coursecompleted';
+            $eventdata->userfrom          = core_user::get_noreply_user();
+            $eventdata->userto            = $data->userid;
+            $eventdata->notification      = 1;
+            $eventdata->subject           = $messagesubject;
+            $eventdata->fullmessage       = $messageplaintext;
+            $eventdata->fullmessageformat = FORMAT_HTML;
+            $eventdata->fullmessagehtml   = $messagebody;
+            $eventdata->smallmessage      = $messageplaintext;
+
+            if ($courseimage = \core_course\external\course_summary_exporter::get_course_image($course)) {
+                $eventdata->customdata  = [
+                    'notificationpictureurl' => $courseimage,
+                ];
+            }
+            message_send($eventdata);
+
+            return $result;
+        }
+
+        return null;
+    }
+
+    /**
+     * Adopt properties from an existing database record.
+     *
+     * @param stdClass $existing The existing database record.
+     */
+    private function adopt_existing_record(stdClass $existing): void {
+        $this->id = (int) $existing->id;
+        // Non-empty (non-zero) timestamps from the database take precedence to respect Moodle completion immutability rules.
+        if (!empty($existing->timecompleted)) {
+            $this->timecompleted = (int) $existing->timecompleted;
+        }
+        if (!empty($existing->timestarted)) {
+            $this->timestarted = (int) $existing->timestarted;
+        }
+        if (!empty($existing->timeenrolled)) {
+            $this->timeenrolled = (int) $existing->timeenrolled;
+        }
     }
 
     /**
      * Save course completion status
      *
      * This method creates a course_completions record if none exists
-     * @access  private
      * @return  int|null id of completion record on successful update.
      */
     private function _save() {
+        global $DB;
+
         if ($this->timeenrolled === null) {
             $this->timeenrolled = 0;
         }
 
-        // Save record
+        // If the ID is not set, the record might already have been created in the database
+        // concurrently or by a CLI process (such as cron) while this process held a stale or negative cache entry.
+        // Pre-checking with a SELECT prevents aborting active PostgreSQL transactions when inserting.
+        if (!isset($this->id) && !empty($this->userid) && !empty($this->course)) {
+            if ($existing = $DB->get_record($this->table, ['userid' => $this->userid, 'course' => $this->course])) {
+                $this->adopt_existing_record($existing);
+            }
+        }
+
+        // Save record.
         if (isset($this->id)) {
             $success = $this->update();
         } else {
-            // Make sure reaggregate field is not null
+            // Make sure reaggregate field is not null.
             if (!$this->reaggregate) {
                 $this->reaggregate = 0;
             }
 
-            // Make sure timestarted is not null
+            // Make sure timestarted is not null.
             if (!$this->timestarted) {
                 $this->timestarted = 0;
             }
 
-            $success = $this->insert();
+            try {
+                $success = $this->insert();
+            } catch (\dml_write_exception $e) {
+                // If a race condition occurred and another process inserted the record concurrently,
+                // retrieve the existing record and update it instead.
+                if (!empty($this->userid) && !empty($this->course)) {
+                    if ($existing = $DB->get_record($this->table, ['userid' => $this->userid, 'course' => $this->course])) {
+                        $this->adopt_existing_record($existing);
+                        $success = $this->update();
+                    } else {
+                        throw $e;
+                    }
+                } else {
+                    throw $e;
+                }
+            }
         }
 
         if ($success) {
