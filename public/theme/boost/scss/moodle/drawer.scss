@@ -24,25 +24,33 @@ $drawer-anchored-header-bottom-gap: 0.5rem !default;
 $drawer-anchored-top-offset: calc(#{$navbar-height} + #{$drawer-anchored-top-gap} - #{$drawer-anchored-header-padding});
 $drawer-anchored-vertical-offset: calc(#{$drawer-anchored-top-offset} + #{$drawer-anchored-bottom-gap});
 $drawer-anchored-toggler-top: calc(#{$navbar-height} + #{$drawer-anchored-top-gap});
-$drawer-anchor-none: calc(50% + #{$course-content-maxwidth} / 2 + #{$drawer-main-gap});
+// Non-numeric values (e.g. none) are invalid inside calc(), so fall back to 100% for anchor math.
+$drawer-content-maxwidth: if(type-of($course-content-maxwidth) == 'number', $course-content-maxwidth, 100%);
+$drawer-anchor-none: calc(50% + #{$drawer-content-maxwidth} / 2 + #{$drawer-main-gap});
 $drawer-anchor-left-open: calc(100% - #{$drawer-left-width});
-$drawer-right-anchor-left-open: calc(50% + #{$course-content-maxwidth} / 2 + #{$drawer-main-gap} + #{$drawer-left-width} / 2);
-$drawer-anchor-right-open: calc(50% + #{$course-content-maxwidth} / 2 + #{$drawer-main-gap} + #{$drawer-right-width} / 2);
+$drawer-right-anchor-left-open: calc(50% + #{$drawer-content-maxwidth} / 2 + #{$drawer-main-gap} + #{$drawer-left-width} / 2);
+$drawer-anchor-right-open: calc(50% + #{$drawer-content-maxwidth} / 2 + #{$drawer-main-gap} + #{$drawer-right-width} / 2);
 $drawer-right-anchor-right-open: calc(100% - #{$drawer-right-width});
 // lg+: both drawers open — anchor formula clamped so drawers don't clip the viewport.
 // Min() picks the smaller: anchor (gap from main) OR flush to viewport edge.
 $drawer-both-offset:      calc((#{$drawer-right-width} - #{$drawer-left-width}) / 2);
-$drawer-both-left-anchor: calc(50% + #{$course-content-maxwidth} / 2 + #{$drawer-both-offset} + #{$drawer-main-gap});
-$drawer-both-right-anchor: calc(50% + #{$course-content-maxwidth} / 2 - #{$drawer-both-offset} + #{$drawer-main-gap});
+$drawer-both-left-anchor: calc(50% + #{$drawer-content-maxwidth} / 2 + #{$drawer-both-offset} + #{$drawer-main-gap});
+$drawer-both-right-anchor: calc(50% + #{$drawer-content-maxwidth} / 2 - #{$drawer-both-offset} + #{$drawer-main-gap});
 $drawer-anchor-both-left: Min(#{$drawer-both-left-anchor}, calc(100% - #{$drawer-left-width}));
 $drawer-anchor-both-right: Min(#{$drawer-both-right-anchor}, calc(100% - #{$drawer-right-width}));
 // xxl: single drawer open — drawer anchored to main-inner edge, accounting for one margin.
-$drawer-anchor-xxl-left-open: calc(50% + #{$course-content-maxwidth} / 2 - #{$drawer-left-width} / 2 + #{$drawer-main-gap});
-$drawer-anchor-xxl-right-open: calc(50% + #{$course-content-maxwidth} / 2 - #{$drawer-right-width} / 2 + #{$drawer-main-gap});
+$drawer-anchor-xxl-left-open: calc(50% + #{$drawer-content-maxwidth} / 2 - #{$drawer-left-width} / 2 + #{$drawer-main-gap});
+$drawer-anchor-xxl-right-open: calc(50% + #{$drawer-content-maxwidth} / 2 - #{$drawer-right-width} / 2 + #{$drawer-main-gap});
 // lg+: single drawer open, clamped so the drawer doesn't clip the viewport at narrower lg widths.
 // Min() picks the smaller: anchor (gap from main) OR flush to viewport edge.
 $drawer-anchor-solo-left-open: Min(#{$drawer-anchor-xxl-left-open}, #{$drawer-anchor-left-open});
 $drawer-anchor-solo-right-open: Min(#{$drawer-anchor-xxl-right-open}, #{$drawer-right-anchor-right-open});
+// Closed drawer anchors, clamped so a drawer never rests beyond the viewport edge when the content is wider than the viewport.
+$drawer-anchor-closed: Min(#{$drawer-anchor-none}, 100%);
+$drawer-right-anchor-left-open-clamped: Min(#{$drawer-right-anchor-left-open}, 100%);
+$drawer-anchor-right-open-clamped: Min(#{$drawer-anchor-right-open}, 100%);
+// Toggle buttons stay fully on screen with a 16px margin.
+$drawer-toggle-max-anchor: calc(100% - #{$icon-medium-width} - 2 * 16px);
 
 :target,
 :focus {
@@ -337,7 +345,7 @@ $right-drawer-width: 320px;
 
         .drawer.drawer-left {
             left: auto;
-            right: $drawer-anchor-none;
+            right: $drawer-anchor-closed;
             width: 0;
             min-width: 0;
             max-width: $drawer-left-width;
@@ -347,7 +355,7 @@ $right-drawer-width: 320px;
 
             &.show {
                 left: auto;
-                right: $drawer-anchor-none;
+                right: $drawer-anchor-closed;
                 width: $drawer-left-width;
             }
 
@@ -358,7 +366,7 @@ $right-drawer-width: 320px;
 
         .drawer.drawer-right {
             right: auto;
-            left: $drawer-anchor-none;
+            left: $drawer-anchor-closed;
             width: $drawer-right-width;
             min-width: 0;
             max-width: $drawer-right-width;
@@ -368,7 +376,7 @@ $right-drawer-width: 320px;
 
             &.show {
                 right: auto;
-                left: $drawer-anchor-none;
+                left: $drawer-anchor-closed;
                 width: $drawer-right-width;
                 clip-path: inset(0 0 0 0);
 
@@ -396,20 +404,20 @@ $right-drawer-width: 320px;
                 }
             }
             .drawer.drawer-right {
-                left: $drawer-right-anchor-left-open;
+                left: $drawer-right-anchor-left-open-clamped;
 
                 &.show {
-                    left: $drawer-right-anchor-left-open;
+                    left: $drawer-right-anchor-left-open-clamped;
                 }
             }
         }
 
         &:has(#page.drawers.show-drawer-right):not(:has(#page.drawers.show-drawer-left)) {
             .drawer.drawer-left {
-                right: $drawer-anchor-right-open;
+                right: $drawer-anchor-right-open-clamped;
 
                 &.show {
-                    right: $drawer-anchor-right-open;
+                    right: $drawer-anchor-right-open-clamped;
                 }
             }
             .drawer.drawer-right {
