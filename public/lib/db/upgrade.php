@@ -2453,5 +2453,16 @@ function xmldb_main_upgrade($oldversion) {
         upgrade_main_savepoint(true, 2026100500.07);
     }
 
+    if ($oldversion < 2026100501.01) {
+        // MDL-89210: Delete orphan activity completion criteria for activities that do not exist
+        // or have activity completion tracking disabled.
+        require_once($CFG->libdir . '/completionlib.php');
+        require_once($CFG->dirroot . '/completion/criteria/completion_criteria_activity.php');
+        \completion_criteria_activity::delete_orphan_criteria();
+
+        // Main savepoint reached.
+        upgrade_main_savepoint(true, 2026100501.01);
+    }
+
     return true;
 }

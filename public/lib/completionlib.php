@@ -950,30 +950,48 @@ class completion_info {
     /**
      * Deletes completion state related to an activity for all users.
      *
-     * Intended for use only when the activity itself is deleted.
+     * When activity completion tracking is disabled, any associated course completion criterion is removed.
+     * Existing completed course completions are preserved; incomplete course completions are flagged for re-aggregation.
      *
      * @param stdClass|cm_info $cm Activity
      */
     public function delete_all_state($cm) {
-        global $DB;
+        global $CFG, $DB;
+        require_once($CFG->dirroot . '/completion/criteria/completion_criteria_activity.php');
 
-        // Delete from database
-        $DB->delete_records('course_modules_completion', array('coursemoduleid'=>$cm->id));
+        // Delete from database.
+        $DB->delete_records('course_modules_completion', ['coursemoduleid' => $cm->id]);
 
-        // Check if there is an associated course completion criteria
-        $criteria = $this->get_criteria(COMPLETION_CRITERIA_TYPE_ACTIVITY);
-        $acriteria = false;
-        foreach ($criteria as $criterion) {
-            if ($criterion->moduleinstance == $cm->id) {
-                $acriteria = $criterion;
-                break;
+        // Always trust the database: the passed $cm may be stale or contain only ->id.
+        $completionvalue = $DB->get_field('course_modules', 'completion', ['id' => $cm->id]);
+        $isdisabled = $completionvalue !== false && (int)$completionvalue === COMPLETION_TRACKING_NONE;
+
+        if ($isdisabled) {
+            // When completion is disabled, remove the criterion and clean up related records.
+            // If it was not a criterion, course_completions is not affected.
+            if (completion_criteria_activity::delete_for_course_module($cm->id, $this->course_id)) {
+                $this->criteria = null;
             }
-        }
+        } else {
+            $criteria = $this->get_criteria(COMPLETION_CRITERIA_TYPE_ACTIVITY);
+            $acriteria = false;
+            foreach ($criteria as $criterion) {
+                if ($criterion->moduleinstance == $cm->id) {
+                    $acriteria = $criterion;
+                    break;
+                }
+            }
 
-        if ($acriteria) {
-            // Delete all criteria completions relating to this activity
-            $DB->delete_records('course_completion_crit_compl', array('course' => $this->course_id, 'criteriaid' => $acriteria->id));
-            $DB->delete_records('course_completions', array('course' => $this->course_id));
+            if ($acriteria) {
+                // When completion remains enabled (e.g. conditions changed), delete criteria completions
+                // and flag incomplete course_completions so they can be re-evaluated under new conditions.
+                $DB->delete_records('course_completion_crit_compl', [
+                    'course' => $this->course_id,
+                    'criteriaid' => $acriteria->id,
+                ]);
+                // Keep already completed course completions, only re-aggregate the incomplete ones.
+                completion_criteria_activity::flag_incomplete_for_reaggregation($this->course_id);
+            }
         }
 
         // Difficult to find affected users, just purge all completion cache.
@@ -1816,24 +1834,48 @@ function aggregate_completions(int $coursecompletionid, bool $mtraceprogress = f
                        FROM {course_completion_criteria} cr
                  INNER JOIN {course} c ON cr.course = c.id
                  INNER JOIN {course_completions} cco ON cco.course = c.id
+                  LEFT JOIN {course_modules} cm
+                         ON (cr.criteriatype = :actcriteriatype1 AND cr.moduleinstance = cm.id)
                   LEFT JOIN {course_completion_crit_compl} ccocr
                          ON ccocr.criteriaid = cr.id AND cco.userid = ccocr.userid
                       WHERE c.enablecompletion = 1
                         AND cco.timecompleted IS NULL
-                        AND cco.reaggregate > 0";
+                        AND cco.reaggregate > 0
+                        AND (cr.criteriatype <> :actcriteriatype2
+                             OR (cm.id IS NOT NULL
+                                 AND cm.completion <> :completionnone
+                                 AND cm.deletioninprogress = 0))";
+
+    $params = [
+        'actcriteriatype1' => COMPLETION_CRITERIA_TYPE_ACTIVITY,
+        'actcriteriatype2' => COMPLETION_CRITERIA_TYPE_ACTIVITY,
+        'completionnone' => COMPLETION_TRACKING_NONE,
+    ];
 
     if ($coursecompletionid) {
-        $sql .= " AND cco.id = ?";
-        $param = $coursecompletionid;
+        $sql .= " AND cco.id = :coursecompletionid";
+        $params['coursecompletionid'] = $coursecompletionid;
     } else {
-        $sql .= " AND cco.reaggregate < ? ORDER BY courseid, cco.userid";
-        $param = $timestarted;
+        $sql .= " AND cco.reaggregate < :timestarted ORDER BY courseid, cco.userid";
+        $params['timestarted'] = $timestarted;
     }
-    $rs = $DB->get_recordset_sql($sql, [$param]);
+    $rs = $DB->get_recordset_sql($sql, $params);
 
     // Check if result is empty.
     if (!$rs->valid()) {
         $rs->close();
+        // Reset reaggregate for queried records so courses without criteria do not loop infinitely.
+        if ($coursecompletionid) {
+            $select = "reaggregate > 0 AND id = ?";
+            $param = $coursecompletionid;
+        } else {
+            $select = "reaggregate > 0 AND reaggregate < ?";
+            $param = $timestarted;
+        }
+        // Avoid a write on every idle cron run: only update when there is something to reset.
+        if ($DB->record_exists_select('course_completions', $select, [$param])) {
+            $DB->set_field_select('course_completions', 'reaggregate', 0, $select, [$param]);
+        }
         return;
     }
 

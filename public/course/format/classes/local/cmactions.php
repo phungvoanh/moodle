@@ -350,16 +350,18 @@ class cmactions extends baseactions {
         // Delete associated blogs and blog tag instances.
         blog_remove_associations_for_module($modcontext->id);
 
+        require_once($CFG->libdir . '/completionlib.php');
+        require_once($CFG->dirroot . '/completion/criteria/completion_criteria_activity.php');
+
         // Delete completion and availability data; it is better to do this even if the
         // features are not turned on, in case they were turned on previously (these will be
         // very quick on an empty table).
         $DB->delete_records('course_modules_completion', ['coursemoduleid' => $cm->id]);
         $DB->delete_records('course_modules_viewed', ['coursemoduleid' => $cm->id]);
-        $DB->delete_records('course_completion_criteria', [
-            'moduleinstance' => $cm->id,
-            'course' => $cm->course,
-            'criteriatype' => COMPLETION_CRITERIA_TYPE_ACTIVITY,
-        ]);
+
+        // Remove any associated course completion criterion and clean up related completions.
+        // Completed course completions are preserved; incomplete ones are re-aggregated.
+        \completion_criteria_activity::delete_for_course_module($cm->id, $cm->course);
 
         // Delete all tag instances associated with the instance of this module.
         \core_tag_tag::delete_instances('mod_' . $modulename, null, $modcontext->id);

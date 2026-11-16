@@ -3370,6 +3370,23 @@ class restore_course_completion_structure_step extends restore_structure_step {
                 );
                 return;
             }
+
+            // Check if the restored module has completion tracking enabled.
+            $hascompletion = $DB->record_exists_select(
+                'course_modules',
+                'id = :id AND completion <> :none',
+                [
+                    'id' => $data->moduleinstance,
+                    'none' => COMPLETION_TRACKING_NONE,
+                ]
+            );
+            if (!$hascompletion) {
+                $this->log(
+                    'Module instance has completion tracking disabled, skipping invalid course completion criterion',
+                    backup::LOG_DEBUG
+                );
+                return;
+            }
         } else {
             $data->module = null;
             $data->moduleinstance = null;

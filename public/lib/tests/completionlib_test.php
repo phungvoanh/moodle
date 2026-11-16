@@ -39,6 +39,10 @@ require_once($CFG->libdir.'/completionlib.php');
 #[\PHPUnit\Framework\Attributes\CoversMethod(\completion_completion::class, 'mark_inprogress')]
 #[\PHPUnit\Framework\Attributes\CoversMethod(\completion_completion::class, 'mark_complete')]
 #[\PHPUnit\Framework\Attributes\CoversMethod(\completion_criteria_completion::class, 'mark_complete')]
+#[\PHPUnit\Framework\Attributes\CoversClass(\completion_criteria_activity::class)]
+#[\PHPUnit\Framework\Attributes\CoversClass(\core_courseformat\local\cmactions::class)]
+#[\PHPUnit\Framework\Attributes\CoversClass(\core_completion_bulkedit_form::class)]
+#[\PHPUnit\Framework\Attributes\CoversFunction('aggregate_completions')]
 final class completionlib_test extends advanced_testcase {
     protected $course;
     protected $user;
@@ -2318,6 +2322,673 @@ final class completionlib_test extends advanced_testcase {
         $criteria = $completioninfo->get_criteria(COMPLETION_CRITERIA_TYPE_ACTIVITY);
 
         $this->assertCount(2, $criteria);
+    }
+
+    /**
+     * Test that disabling activity completion automatically removes the course completion criterion.
+     */
+    public function test_disabling_activity_completion_removes_criterion(): void {
+        global $DB;
+        $this->setup_data();
+
+        // 1. Create an activity with completion tracking.
+        $generator = $this->getDataGenerator();
+        $page = $generator->create_module('page', [
+            'course' => $this->course->id,
+            'completion' => COMPLETION_TRACKING_AUTOMATIC,
+            'completionview' => COMPLETION_VIEW_REQUIRED,
+        ]);
+        $cm = get_coursemodule_from_instance('page', $page->id);
+
+        // 2. Set this activity as a course completion criterion.
+        $criteriadata = (object)[
+            'id' => $this->course->id,
+            'criteria_activity' => [$cm->id => 1],
+        ];
+        $criterion = new \completion_criteria_activity();
+        $criterion->update_config($criteriadata);
+
+        // Verify criterion was saved in DB.
+        $this->assertTrue($DB->record_exists('course_completion_criteria', [
+            'course' => $this->course->id,
+            'moduleinstance' => $cm->id,
+            'criteriatype' => COMPLETION_CRITERIA_TYPE_ACTIVITY,
+        ]));
+
+        // 3. Disable completion for the activity.
+        $DB->set_field('course_modules', 'completion', COMPLETION_TRACKING_NONE, ['id' => $cm->id]);
+        course_modinfo::build_course_cache($this->course);
+        $cm->completion = COMPLETION_TRACKING_NONE;
+        $cminfo = cm_info::create($cm);
+
+        $completion = new \completion_info($this->course);
+        $completion->reset_all_state($cminfo);
+
+        // 4. Verify: Record in course_completion_criteria must be removed.
+        $this->assertFalse($DB->record_exists('course_completion_criteria', [
+            'course' => $this->course->id,
+            'moduleinstance' => $cm->id,
+            'criteriatype' => COMPLETION_CRITERIA_TYPE_ACTIVITY,
+        ]));
+
+        // Verify: get_criteria() no longer returns this criterion.
+        $criteria = $completion->get_criteria(COMPLETION_CRITERIA_TYPE_ACTIVITY);
+        $this->assertEmpty($criteria);
+    }
+
+    /**
+     * Test that deleting a course module removes criterion and its criteria completions.
+     */
+    public function test_deleting_activity_removes_criterion_and_crit_compl(): void {
+        global $DB;
+        $this->setup_data();
+
+        $generator = $this->getDataGenerator();
+        $page = $generator->create_module('page', [
+            'course' => $this->course->id,
+            'completion' => COMPLETION_TRACKING_AUTOMATIC,
+            'completionview' => COMPLETION_VIEW_REQUIRED,
+        ]);
+        $cm = get_coursemodule_from_instance('page', $page->id);
+
+        // Set as criterion.
+        $criteriadata = (object)[
+            'id' => $this->course->id,
+            'criteria_activity' => [$cm->id => 1],
+        ];
+        $criterion = new \completion_criteria_activity();
+        $criterion->update_config($criteriadata);
+
+        $critrecord = $DB->get_record('course_completion_criteria', [
+            'course' => $this->course->id,
+            'moduleinstance' => $cm->id,
+            'criteriatype' => COMPLETION_CRITERIA_TYPE_ACTIVITY,
+        ]);
+        $this->assertNotEmpty($critrecord);
+
+        // Insert a dummy criteria completion record.
+        $DB->insert_record('course_completion_crit_compl', [
+            'course' => $this->course->id,
+            'criteriaid' => $critrecord->id,
+            'userid' => $this->user->id,
+            'timecompleted' => time(),
+        ]);
+
+        // Delete the course module via cmactions.
+        \core_courseformat\formatactions::cm($this->course->id)->delete($cm->id);
+
+        // Verify criterion is deleted.
+        $this->assertFalse($DB->record_exists('course_completion_criteria', [
+            'id' => $critrecord->id,
+        ]));
+
+        // Verify criteria completion record is deleted.
+        $this->assertFalse($DB->record_exists('course_completion_crit_compl', [
+            'criteriaid' => $critrecord->id,
+        ]));
+    }
+
+    /**
+     * Test that aggregate_completions ignores criteria with disabled activity completion.
+     */
+    public function test_aggregate_completions_ignores_disabled_activity_criteria(): void {
+        global $DB;
+        $this->setup_data();
+
+        $generator = $this->getDataGenerator();
+
+        // Create 2 pages with automatic completion.
+        $page1 = $generator->create_module('page', [
+            'course' => $this->course->id,
+            'completion' => COMPLETION_TRACKING_AUTOMATIC,
+            'completionview' => COMPLETION_VIEW_REQUIRED,
+        ]);
+        $cm1 = get_coursemodule_from_instance('page', $page1->id);
+
+        $page2 = $generator->create_module('page', [
+            'course' => $this->course->id,
+            'completion' => COMPLETION_TRACKING_AUTOMATIC,
+            'completionview' => COMPLETION_VIEW_REQUIRED,
+        ]);
+        $cm2 = get_coursemodule_from_instance('page', $page2->id);
+
+        // Set both activities as criteria.
+        $criteriadata = (object)[
+            'id' => $this->course->id,
+            'criteria_activity' => [$cm1->id => 1, $cm2->id => 1],
+        ];
+        $criterion = new \completion_criteria_activity();
+        $criterion->update_config($criteriadata);
+
+        // Enrol student.
+        $student = $generator->create_user();
+        $generator->enrol_user($student->id, $this->course->id);
+
+        // Student completes page2.
+        $completion = new \completion_info($this->course);
+        $completion->update_state($cm2, COMPLETION_COMPLETE, $student->id);
+
+        // Manually simulate an orphan criterion for page1 with completion=0 in DB.
+        $DB->set_field('course_modules', 'completion', COMPLETION_TRACKING_NONE, ['id' => $cm1->id]);
+
+        // Create course_completions record flagged for reaggregation.
+        $ccompletion = new \completion_completion([
+            'course' => $this->course->id,
+            'userid' => $student->id,
+        ]);
+        $ccompletion->mark_inprogress();
+
+        // Run aggregate_completions.
+        aggregate_completions($ccompletion->id);
+
+        // Verify that the course completion was reaggregated and page1 did not cause an SQL error.
+        $record = $DB->get_record('course_completions', ['id' => $ccompletion->id]);
+        $this->assertEquals(0, $record->reaggregate);
+    }
+
+    /**
+     * Test that aggregate_completions resets reaggregate flag even when all criteria are disabled.
+     */
+    public function test_aggregate_completions_resets_reaggregate_when_no_valid_criteria(): void {
+        global $DB;
+        $this->setup_data();
+
+        $generator = $this->getDataGenerator();
+
+        // Create 1 page with automatic completion.
+        $page = $generator->create_module('page', [
+            'course' => $this->course->id,
+            'completion' => COMPLETION_TRACKING_AUTOMATIC,
+            'completionview' => COMPLETION_VIEW_REQUIRED,
+        ]);
+        $cm = get_coursemodule_from_instance('page', $page->id);
+
+        // Set as sole course criterion.
+        $criteriadata = (object)[
+            'id' => $this->course->id,
+            'criteria_activity' => [$cm->id => 1],
+        ];
+        $criterion = new \completion_criteria_activity();
+        $criterion->update_config($criteriadata);
+
+        // Enrol student.
+        $student = $generator->create_user();
+        $generator->enrol_user($student->id, $this->course->id);
+
+        // Simulate disabled completion on the module in DB.
+        $DB->set_field('course_modules', 'completion', COMPLETION_TRACKING_NONE, ['id' => $cm->id]);
+
+        // Create course_completions record flagged for reaggregation.
+        $ccompletion = new \completion_completion([
+            'course' => $this->course->id,
+            'userid' => $student->id,
+        ]);
+        $ccompletion->mark_inprogress();
+        $this->assertGreaterThan(0, $ccompletion->reaggregate);
+
+        // Run aggregate_completions with specific id.
+        aggregate_completions($ccompletion->id);
+
+        // Verify reaggregate was reset to 0 so cron does not loop infinitely.
+        $record = $DB->get_record('course_completions', ['id' => $ccompletion->id]);
+        $this->assertEquals(0, $record->reaggregate);
+    }
+
+    /**
+     * Test that aggregate_completions with multiple courses resets reaggregate for both valid and disabled courses.
+     */
+    public function test_aggregate_completions_mixed_courses_resets_both(): void {
+        global $DB;
+        $this->setup_data();
+
+        $generator = $this->getDataGenerator();
+
+        // Course 1 (already $this->course): has valid automatic completion activity.
+        $page1 = $generator->create_module('page', [
+            'course' => $this->course->id,
+            'completion' => COMPLETION_TRACKING_AUTOMATIC,
+            'completionview' => COMPLETION_VIEW_REQUIRED,
+        ]);
+        $cm1 = get_coursemodule_from_instance('page', $page1->id);
+
+        $criterion1 = new \completion_criteria_activity();
+        $criteriadata1 = (object)[
+            'id' => $this->course->id,
+            'criteria_activity' => [$cm1->id => 1],
+        ];
+        $criterion1->update_config($criteriadata1);
+
+        $student1 = $generator->create_user();
+        $generator->enrol_user($student1->id, $this->course->id);
+
+        $crit1 = $DB->get_record('course_completion_criteria', [
+            'course' => $this->course->id,
+            'moduleinstance' => $cm1->id,
+        ]);
+        $DB->insert_record('course_completion_crit_compl', [
+            'course' => $this->course->id,
+            'criteriaid' => $crit1->id,
+            'userid' => $student1->id,
+            'timecompleted' => time(),
+        ]);
+
+        $ccompletion1 = new \completion_completion([
+            'course' => $this->course->id,
+            'userid' => $student1->id,
+        ]);
+        $ccompletion1->mark_inprogress();
+
+        // Course 2: has only a disabled activity criterion.
+        $course2 = $generator->create_course(['enablecompletion' => 1]);
+        $page2 = $generator->create_module('page', [
+            'course' => $course2->id,
+            'completion' => COMPLETION_TRACKING_AUTOMATIC,
+            'completionview' => COMPLETION_VIEW_REQUIRED,
+        ]);
+        $cm2 = get_coursemodule_from_instance('page', $page2->id);
+
+        $criterion2 = new \completion_criteria_activity();
+        $criteriadata2 = (object)[
+            'id' => $course2->id,
+            'criteria_activity' => [$cm2->id => 1],
+        ];
+        $criterion2->update_config($criteriadata2);
+
+        $student2 = $generator->create_user();
+        $generator->enrol_user($student2->id, $course2->id);
+
+        // Disable completion for page 2 in DB.
+        $DB->set_field('course_modules', 'completion', COMPLETION_TRACKING_NONE, ['id' => $cm2->id]);
+
+        $ccompletion2 = new \completion_completion([
+            'course' => $course2->id,
+            'userid' => $student2->id,
+        ]);
+        $ccompletion2->mark_inprogress();
+
+        // Backdate reaggregate so cron finds both.
+        $past = time() - 100;
+        $DB->set_field('course_completions', 'reaggregate', $past, ['id' => $ccompletion1->id]);
+        $DB->set_field('course_completions', 'reaggregate', $past, ['id' => $ccompletion2->id]);
+
+        // Run full cron aggregation.
+        aggregate_completions(0);
+
+        // Course 1 should be marked complete and reaggregate reset to 0.
+        $rec1 = $DB->get_record('course_completions', ['id' => $ccompletion1->id]);
+        $this->assertNotNull($rec1->timecompleted);
+        $this->assertEquals(0, $rec1->reaggregate);
+
+        // Course 2 should NOT be marked complete, but reaggregate must still be reset to 0.
+        $rec2 = $DB->get_record('course_completions', ['id' => $ccompletion2->id]);
+        $this->assertNull($rec2->timecompleted);
+        $this->assertEquals(0, $rec2->reaggregate);
+    }
+
+    /**
+     * Test upgrade step logic for cleaning orphan activity criteria (MDL-89210).
+     */
+    public function test_upgrade_cleans_orphan_activity_criteria(): void {
+        global $DB;
+        $this->setup_data();
+
+        $generator = $this->getDataGenerator();
+
+        // 1. Valid module with automatic completion.
+        $validpage = $generator->create_module('page', [
+            'course' => $this->course->id,
+            'completion' => COMPLETION_TRACKING_AUTOMATIC,
+        ]);
+        $validcm = get_coursemodule_from_instance('page', $validpage->id);
+
+        // 2. Module with completion disabled.
+        $disabledpage = $generator->create_module('page', [
+            'course' => $this->course->id,
+            'completion' => COMPLETION_TRACKING_NONE,
+        ]);
+        $disabledcm = get_coursemodule_from_instance('page', $disabledpage->id);
+
+        // 3. Module marked as deletion in progress.
+        $deletingpage = $generator->create_module('page', [
+            'course' => $this->course->id,
+            'completion' => COMPLETION_TRACKING_AUTOMATIC,
+        ]);
+        $deletingcm = get_coursemodule_from_instance('page', $deletingpage->id);
+        $DB->set_field('course_modules', 'deletioninprogress', 1, ['id' => $deletingcm->id]);
+
+        // Create criteria in DB for all cases.
+        $validcritid = $DB->insert_record('course_completion_criteria', [
+            'course' => $this->course->id,
+            'criteriatype' => COMPLETION_CRITERIA_TYPE_ACTIVITY,
+            'moduleinstance' => $validcm->id,
+        ]);
+        $disabledcritid = $DB->insert_record('course_completion_criteria', [
+            'course' => $this->course->id,
+            'criteriatype' => COMPLETION_CRITERIA_TYPE_ACTIVITY,
+            'moduleinstance' => $disabledcm->id,
+        ]);
+        $deletingcritid = $DB->insert_record('course_completion_criteria', [
+            'course' => $this->course->id,
+            'criteriatype' => COMPLETION_CRITERIA_TYPE_ACTIVITY,
+            'moduleinstance' => $deletingcm->id,
+        ]);
+        $nonexistentcritid = $DB->insert_record('course_completion_criteria', [
+            'course' => $this->course->id,
+            'criteriatype' => COMPLETION_CRITERIA_TYPE_ACTIVITY,
+            'moduleinstance' => 999999, // Non-existent cm id.
+        ]);
+
+        // Insert criteria completion records.
+        $user = $generator->create_user();
+        foreach ([$validcritid, $disabledcritid, $deletingcritid, $nonexistentcritid] as $cid) {
+            $DB->insert_record('course_completion_crit_compl', [
+                'course' => $this->course->id,
+                'criteriaid' => $cid,
+                'userid' => $user->id,
+                'timecompleted' => time(),
+            ]);
+        }
+
+        // Create course completion records: 1 completed, 1 in-progress.
+        $now = time();
+        $doneuser = $generator->create_user();
+        $doneid = $DB->insert_record('course_completions', [
+            'course' => $this->course->id,
+            'userid' => $doneuser->id,
+            'timecompleted' => $now,
+            'reaggregate' => 0,
+        ]);
+        $progressid = $DB->insert_record('course_completions', [
+            'course' => $this->course->id,
+            'userid' => $user->id,
+            'timecompleted' => null,
+            'reaggregate' => 0,
+        ]);
+
+        // Execute the orphan criteria cleanup helper used by the upgrade step.
+        global $CFG;
+        require_once($CFG->dirroot . '/completion/criteria/completion_criteria_activity.php');
+        \completion_criteria_activity::delete_orphan_criteria();
+
+        // Verify orphan criteria and crit_compl are deleted.
+        $this->assertFalse($DB->record_exists('course_completion_criteria', ['id' => $disabledcritid]));
+        $this->assertFalse($DB->record_exists('course_completion_criteria', ['id' => $deletingcritid]));
+        $this->assertFalse($DB->record_exists('course_completion_criteria', ['id' => $nonexistentcritid]));
+        $this->assertFalse($DB->record_exists('course_completion_crit_compl', ['criteriaid' => $disabledcritid]));
+
+        // Verify valid criterion remains intact.
+        $this->assertTrue($DB->record_exists('course_completion_criteria', ['id' => $validcritid]));
+        $this->assertTrue($DB->record_exists('course_completion_crit_compl', ['criteriaid' => $validcritid]));
+
+        // Verify course completions: completed is preserved, in-progress is flagged for re-aggregation.
+        $this->assertEquals($now, $DB->get_field('course_completions', 'timecompleted', ['id' => $doneid]));
+        $this->assertEquals(0, $DB->get_field('course_completions', 'reaggregate', ['id' => $doneid]));
+        $this->assertGreaterThan(0, $DB->get_field('course_completions', 'reaggregate', ['id' => $progressid]));
+    }
+
+    /**
+     * Test that delete_all_state preserves completed course completions when completion remains enabled.
+     */
+    public function test_delete_all_state_when_completion_enabled_preserves_completed(): void {
+        global $DB;
+        $this->setup_data();
+
+        $generator = $this->getDataGenerator();
+        $page = $generator->create_module('page', [
+            'course' => $this->course->id,
+            'completion' => COMPLETION_TRACKING_AUTOMATIC,
+            'completionview' => COMPLETION_VIEW_REQUIRED,
+        ]);
+        $cm = get_coursemodule_from_instance('page', $page->id);
+
+        $criterion = new \completion_criteria_activity();
+        $criteriadata = (object)[
+            'id' => $this->course->id,
+            'criteria_activity' => [$cm->id => 1],
+        ];
+        $criterion->update_config($criteriadata);
+
+        $done = $generator->create_user();
+        $inprogress = $generator->create_user();
+        $now = time();
+
+        $doneid = $DB->insert_record('course_completions', [
+            'course' => $this->course->id,
+            'userid' => $done->id,
+            'timeenrolled' => $now,
+            'timestarted' => $now,
+            'timecompleted' => $now,
+            'reaggregate' => 0,
+        ]);
+        $progressid = $DB->insert_record('course_completions', [
+            'course' => $this->course->id,
+            'userid' => $inprogress->id,
+            'timeenrolled' => $now,
+            'timestarted' => $now,
+            'timecompleted' => null,
+            'reaggregate' => 0,
+        ]);
+
+        // Call delete_all_state with completion still enabled.
+        $cminfo = \cm_info::create($cm);
+        $completion = new \completion_info($this->course);
+        $completion->delete_all_state($cminfo);
+
+        // Criterion must still exist in DB.
+        $this->assertTrue(\completion_criteria_activity::is_course_criterion($cm->id, $this->course->id));
+
+        // Completed user's record must be preserved.
+        $this->assertEquals($now, $DB->get_field('course_completions', 'timecompleted', ['id' => $doneid]));
+        $this->assertEquals(0, $DB->get_field('course_completions', 'reaggregate', ['id' => $doneid]));
+
+        // Incomplete user's record must be flagged for reaggregation.
+        $this->assertGreaterThan(0, $DB->get_field('course_completions', 'reaggregate', ['id' => $progressid]));
+    }
+
+    /**
+     * Test that is_course_criterion and any_is_course_criterion correctly detect criteria.
+     */
+    public function test_is_course_criterion(): void {
+        $this->setup_data();
+
+        $generator = $this->getDataGenerator();
+        $page = $generator->create_module('page', [
+            'course' => $this->course->id,
+            'completion' => COMPLETION_TRACKING_AUTOMATIC,
+            'completionview' => COMPLETION_VIEW_REQUIRED,
+        ]);
+        $cm = get_coursemodule_from_instance('page', $page->id);
+
+        $this->assertFalse(\completion_criteria_activity::is_course_criterion($cm->id, $this->course->id));
+        $this->assertFalse(\completion_criteria_activity::any_is_course_criterion([$cm->id], $this->course->id));
+        $this->assertFalse(\completion_criteria_activity::any_is_course_criterion([], $this->course->id));
+
+        // Add as criterion.
+        $criteriadata = (object)[
+            'id' => $this->course->id,
+            'criteria_activity' => [$cm->id => 1],
+        ];
+        $criterion = new \completion_criteria_activity();
+        $criterion->update_config($criteriadata);
+
+        $this->assertTrue(\completion_criteria_activity::is_course_criterion($cm->id, $this->course->id));
+        $this->assertTrue(\completion_criteria_activity::any_is_course_criterion([$cm->id, 99999], $this->course->id));
+        $this->assertFalse(\completion_criteria_activity::any_is_course_criterion([99999], $this->course->id));
+    }
+
+    /**
+     * Test that disabling completion keeps already completed course completions (MDL-89210).
+     */
+    public function test_delete_for_course_module_preserves_completed_course_completions(): void {
+        global $DB;
+        $this->setup_data();
+
+        $generator = $this->getDataGenerator();
+        $page = $generator->create_module('page', [
+            'course' => $this->course->id,
+            'completion' => COMPLETION_TRACKING_AUTOMATIC,
+            'completionview' => COMPLETION_VIEW_REQUIRED,
+        ]);
+        $cm = get_coursemodule_from_instance('page', $page->id);
+
+        $criterion = new \completion_criteria_activity();
+        $criteriadata = (object)['id' => $this->course->id, 'criteria_activity' => [$cm->id => 1]];
+        $criterion->update_config($criteriadata);
+
+        $done = $generator->create_user();
+        $inprogress = $generator->create_user();
+        $now = time();
+        $doneid = $DB->insert_record('course_completions', [
+            'course' => $this->course->id,
+            'userid' => $done->id,
+            'timeenrolled' => $now,
+            'timestarted' => $now,
+            'timecompleted' => $now,
+            'reaggregate' => 0,
+        ]);
+        $progressid = $DB->insert_record('course_completions', [
+            'course' => $this->course->id,
+            'userid' => $inprogress->id,
+            'timeenrolled' => $now,
+            'timestarted' => $now,
+            'timecompleted' => null,
+            'reaggregate' => 0,
+        ]);
+
+        $this->assertTrue(\completion_criteria_activity::delete_for_course_module($cm->id, $this->course->id));
+
+        $this->assertEquals($now, $DB->get_field('course_completions', 'timecompleted', ['id' => $doneid]));
+        $this->assertEquals(0, $DB->get_field('course_completions', 'reaggregate', ['id' => $doneid]));
+        $this->assertGreaterThan(0, $DB->get_field('course_completions', 'reaggregate', ['id' => $progressid]));
+    }
+
+    /**
+     * Test delete_all_state keeps the criterion when passed an object with only an id and completion is enabled.
+     */
+    public function test_delete_all_state_with_id_only_keeps_criterion(): void {
+        global $DB;
+        $this->setup_data();
+
+        $page = $this->getDataGenerator()->create_module('page', [
+            'course' => $this->course->id,
+            'completion' => COMPLETION_TRACKING_AUTOMATIC,
+            'completionview' => COMPLETION_VIEW_REQUIRED,
+        ]);
+        $cm = get_coursemodule_from_instance('page', $page->id);
+        $criterion = new \completion_criteria_activity();
+        $criteriadata = (object)['id' => $this->course->id, 'criteria_activity' => [$cm->id => 1]];
+        $criterion->update_config($criteriadata);
+
+        $completion = new \completion_info($this->course);
+        $completion->delete_all_state((object)['id' => $cm->id]);
+
+        $this->assertTrue(\completion_criteria_activity::is_course_criterion($cm->id, $this->course->id));
+    }
+
+    /**
+     * Test delete_for_course_module removes duplicate criteria too.
+     */
+    public function test_delete_for_course_module_removes_duplicates(): void {
+        global $DB;
+        $this->setup_data();
+
+        $page = $this->getDataGenerator()->create_module('page', [
+            'course' => $this->course->id,
+            'completion' => COMPLETION_TRACKING_AUTOMATIC,
+            'completionview' => COMPLETION_VIEW_REQUIRED,
+        ]);
+        $cm = get_coursemodule_from_instance('page', $page->id);
+        $data = (object)['id' => $this->course->id, 'criteria_activity' => [$cm->id => 1]];
+        $first = new \completion_criteria_activity();
+        $first->update_config($data);
+        $second = new \completion_criteria_activity();
+        $second->update_config($data);
+        $this->assertEquals(2, $DB->count_records('course_completion_criteria', ['moduleinstance' => $cm->id]));
+
+        $this->assertTrue(\completion_criteria_activity::delete_for_course_module($cm->id, $this->course->id));
+        $this->assertEquals(0, $DB->count_records('course_completion_criteria', ['moduleinstance' => $cm->id]));
+    }
+
+    /**
+     * Test update_config does not create criteria for activities with completion disabled.
+     */
+    public function test_update_config_skips_disabled_activity(): void {
+        global $DB;
+        $this->setup_data();
+
+        $page = $this->getDataGenerator()->create_module('page', [
+            'course' => $this->course->id,
+            'completion' => COMPLETION_TRACKING_NONE,
+        ]);
+        $cm = get_coursemodule_from_instance('page', $page->id);
+        $criterion = new \completion_criteria_activity();
+        $criteriadata = (object)['id' => $this->course->id, 'criteria_activity' => [$cm->id => 1]];
+        $criterion->update_config($criteriadata);
+
+        $this->assertFalse(\completion_criteria_activity::is_course_criterion($cm->id, $this->course->id));
+    }
+
+    /**
+     * Test bulk completion edit removes the criterion when completion is disabled.
+     */
+    public function test_bulk_disable_completion_removes_criterion(): void {
+        $this->setAdminUser();
+        $this->setup_data();
+
+        $page = $this->getDataGenerator()->create_module('page', [
+            'course' => $this->course->id,
+            'completion' => COMPLETION_TRACKING_AUTOMATIC,
+            'completionview' => COMPLETION_VIEW_REQUIRED,
+        ]);
+        $cm = get_coursemodule_from_instance('page', $page->id);
+        $criterion = new \completion_criteria_activity();
+        $criteriadata = (object)['id' => $this->course->id, 'criteria_activity' => [$cm->id => 1]];
+        $criterion->update_config($criteriadata);
+
+        $manager = new \core_completion\manager($this->course->id);
+        $manager->apply_completion((object)[
+            'cmid' => [$cm->id],
+            'completion' => COMPLETION_TRACKING_NONE,
+            'completionexpected' => 0,
+        ], false);
+
+        $this->assertFalse(\completion_criteria_activity::is_course_criterion($cm->id, $this->course->id));
+    }
+
+    /**
+     * Test bulk edit form shows warning only when a selected activity is a course completion criterion.
+     */
+    public function test_bulkedit_form_displays_criterion_warning(): void {
+        global $PAGE;
+        $this->setAdminUser();
+        $this->setup_data();
+        $PAGE->set_url(new \moodle_url('/course/bulkcompletion.php', ['id' => $this->course->id]));
+        $PAGE->set_course($this->course);
+
+        $page = $this->getDataGenerator()->create_module('page', [
+            'course' => $this->course->id,
+            'completion' => COMPLETION_TRACKING_AUTOMATIC,
+            'completionview' => COMPLETION_VIEW_REQUIRED,
+        ]);
+        $modinfo = get_fast_modinfo($this->course);
+        $cminfo = $modinfo->get_cm($page->cmid);
+        $expectedwarning = get_string('activityiscoursecompletioncriterion', 'completion');
+
+        // Not a criterion yet: warning must not be shown.
+        $formwithout = new \core_completion_bulkedit_form(null, ['cms' => [$cminfo]]);
+        $renderedwithout = $formwithout->render();
+        $this->assertStringNotContainsString($expectedwarning, $renderedwithout);
+        $this->assertSame(0, substr_count($renderedwithout, 'id="fitem_id_criterionwarning"'));
+
+        // Set as criterion: warning must be shown exactly once.
+        $criterion = new \completion_criteria_activity();
+        $criteriadata = (object)['id' => $this->course->id, 'criteria_activity' => [$cminfo->id => 1]];
+        $criterion->update_config($criteriadata);
+
+        $formwith = new \core_completion_bulkedit_form(null, ['cms' => [$cminfo]]);
+        $rendered = $formwith->render();
+        $this->assertStringContainsString($expectedwarning, $rendered);
+        $this->assertSame(1, substr_count($rendered, 'id="fitem_id_criterionwarning"'));
     }
 }
 

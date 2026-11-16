@@ -90,12 +90,158 @@ class completion_criteria_activity extends completion_criteria {
                 // Only update those which are checked.
                 if (!empty($val)) {
                     $module = $DB->get_record('course_modules', array('id' => $activity));
+                    if (!$module || $module->completion == COMPLETION_TRACKING_NONE || $module->deletioninprogress) {
+                        // Never create a criterion that can not be satisfied.
+                        continue;
+                    }
                     $this->module = self::get_mod_name($module->module);
                     $this->moduleinstance = $activity;
                     $this->id = null;
                     $this->insert();
                 }
             }
+        }
+    }
+
+    /**
+     * Delete the course completion criterion for a course module and clean up related completions.
+     *
+     * Existing course completions that are already marked as completed are preserved.
+     *
+     * @param int $coursemoduleid The course module id.
+     * @param int $courseid The course id.
+     * @return bool True if a criterion was found and deleted, false otherwise.
+     */
+    public static function delete_for_course_module(int $coursemoduleid, int $courseid): bool {
+        global $DB;
+
+        // There may be duplicates, so remove every matching criterion.
+        $criteriaids = $DB->get_fieldset_select(
+            'course_completion_criteria',
+            'id',
+            'course = :course AND moduleinstance = :cmid AND criteriatype = :type',
+            [
+                'course' => $courseid,
+                'cmid' => $coursemoduleid,
+                'type' => COMPLETION_CRITERIA_TYPE_ACTIVITY,
+            ]
+        );
+
+        if (!empty($criteriaids)) {
+            $transaction = $DB->start_delegated_transaction();
+            [$insql, $inparams] = $DB->get_in_or_equal($criteriaids, SQL_PARAMS_NAMED);
+            $DB->delete_records_select(
+                'course_completion_crit_compl',
+                "course = :course AND criteriaid $insql",
+                ['course' => $courseid] + $inparams
+            );
+            $DB->delete_records_select('course_completion_criteria', "id $insql", $inparams);
+            self::flag_incomplete_for_reaggregation($courseid);
+            $transaction->allow_commit();
+            return true;
+        }
+
+        return false;
+    }
+
+    /**
+     * Flag the course completions that are not yet complete so they are re-aggregated by cron.
+     *
+     * Completed course completions (timecompleted set) are never modified.
+     *
+     * @param int $courseid The course id.
+     * @return void
+     */
+    public static function flag_incomplete_for_reaggregation(int $courseid): void {
+        global $DB;
+
+        $DB->set_field_select(
+            'course_completions',
+            'reaggregate',
+            time(),
+            'course = :course AND timecompleted IS NULL',
+            ['course' => $courseid]
+        );
+    }
+
+    /**
+     * Check if any of the given course modules is used as a course completion criterion.
+     *
+     * @param int[] $coursemoduleids Array of course module IDs.
+     * @param int $courseid The course id.
+     * @return bool True if at least one module is a criterion, false otherwise.
+     */
+    public static function any_is_course_criterion(array $coursemoduleids, int $courseid): bool {
+        global $DB;
+
+        if (empty($coursemoduleids)) {
+            return false;
+        }
+
+        foreach (array_chunk($coursemoduleids, 1000) as $chunk) {
+            [$insql, $inparams] = $DB->get_in_or_equal($chunk, SQL_PARAMS_NAMED);
+            $exists = $DB->record_exists_select(
+                'course_completion_criteria',
+                "course = :course AND criteriatype = :type AND moduleinstance $insql",
+                ['course' => $courseid, 'type' => COMPLETION_CRITERIA_TYPE_ACTIVITY] + $inparams
+            );
+            if ($exists) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Check if a course module is used as a course completion criterion.
+     *
+     * @param int $coursemoduleid The course module id.
+     * @param int $courseid The course id.
+     * @return bool True if the module is a criterion, false otherwise.
+     */
+    public static function is_course_criterion(int $coursemoduleid, int $courseid): bool {
+        return self::any_is_course_criterion([$coursemoduleid], $courseid);
+    }
+
+    /**
+     * Delete orphan activity completion criteria where the module is missing, disabled, or being deleted.
+     *
+     * Existing completed course completions are preserved; incomplete ones are flagged for re-aggregation.
+     *
+     * @return void
+     */
+    public static function delete_orphan_criteria(): void {
+        global $CFG, $DB;
+        require_once($CFG->libdir . '/completionlib.php');
+
+        $sql = "SELECT cr.id, cr.course
+                  FROM {course_completion_criteria} cr
+             LEFT JOIN {course_modules} cm ON cr.moduleinstance = cm.id
+                 WHERE cr.criteriatype = :criteriatype
+                   AND (cm.id IS NULL
+                        OR cm.completion = :completionnone
+                        OR cm.deletioninprogress = 1)";
+        $params = [
+            'criteriatype' => COMPLETION_CRITERIA_TYPE_ACTIVITY,
+            'completionnone' => COMPLETION_TRACKING_NONE,
+        ];
+
+        while ($orphans = $DB->get_records_sql_menu($sql, $params, 0, 1000)) {
+            $transaction = $DB->start_delegated_transaction();
+            [$insql, $inparams] = $DB->get_in_or_equal(array_keys($orphans));
+            $DB->delete_records_select('course_completion_crit_compl', "criteriaid $insql", $inparams);
+            $DB->delete_records_select('course_completion_criteria', "id $insql", $inparams);
+
+            [$courseinsql, $courseinparams] = $DB->get_in_or_equal(array_unique(array_values($orphans)));
+            $DB->set_field_select(
+                'course_completions',
+                'reaggregate',
+                time(),
+                "timecompleted IS NULL AND course $courseinsql",
+                $courseinparams
+            );
+            $transaction->allow_commit();
         }
     }
 
