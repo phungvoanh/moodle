@@ -85,6 +85,9 @@ class core_completion_bulkedit_form extends core_completion_edit_base_form {
      * Form definition
      */
     public function definition() {
+        global $CFG, $OUTPUT;
+        require_once($CFG->dirroot . '/completion/criteria/completion_criteria_activity.php');
+
         $this->cms = $this->_customdata['cms'];
         $cm = reset($this->cms); // First selected course module.
         $this->course = $cm->get_course();
@@ -99,6 +102,23 @@ class core_completion_bulkedit_form extends core_completion_edit_base_form {
         }
 
         parent::definition();
+
+        // Warn if any selected activity is used as a course completion criterion.
+        $warningel = 'criterionwarning' . $this->get_suffix();
+        $cmids = array_map(fn($cm) => $cm->id, $this->cms);
+        if (\completion_criteria_activity::any_is_course_criterion($cmids, $this->course->id)) {
+            if ($mform->elementExists($warningel)) {
+                $mform->getElement($warningel)->setText(
+                    $OUTPUT->notification(
+                        get_string('activityiscoursecompletioncriterion', 'completion'),
+                        \core\output\notification::NOTIFY_WARNING,
+                        false
+                    )
+                );
+            }
+        } else if ($mform->elementExists($warningel)) {
+            $mform->removeElement($warningel);
+        }
 
         $modform = $this->get_module_form();
         if ($modform) {

@@ -36,6 +36,7 @@ $string['activitiescompletednote'] = 'Note: Activity completion must be set for 
 $string['activitycompletion'] = 'Completion conditions';
 $string['activitycompletionupdated'] = 'Changes saved';
 $string['activitygradetopassnotset'] = 'This activity does not have a valid grade to pass set. It may be set in the Grade section of the activity settings.';
+$string['activityiscoursecompletioncriterion'] = 'This activity is a course completion criterion. If you turn off completion tracking for it, it will be removed from the course completion criteria and learners who meet the remaining criteria may be marked as having completed the course.';
 $string['addconditions'] = 'Add conditions';
 $string['affectedactivities'] = 'The changes will affect the following <b>{$a}</b> activities or resources:';
 $string['aggregationmethod'] = 'Aggregation method';

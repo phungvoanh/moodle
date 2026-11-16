@@ -252,4 +252,111 @@ final class restore_stepslib_test extends \advanced_testcase {
             $step->process_file(['contenthash' => $hash]);
         }
     }
+
+    /**
+     * Test process_course_completion_criteria skips activities where completion is disabled.
+     *
+     * @covers \restore_course_completion_structure_step::process_course_completion_criteria
+     */
+    public function test_process_course_completion_criteria_disabled_activity(): void {
+        global $DB;
+        $this->resetAfterTest();
+
+        $generator = $this->getDataGenerator();
+        $course = $generator->create_course(['enablecompletion' => 1]);
+
+        // Create page with completion disabled (completion = 0).
+        $page = $generator->create_module('page', [
+            'course' => $course->id,
+            'completion' => COMPLETION_TRACKING_NONE,
+        ]);
+        $cm = get_coursemodule_from_instance('page', $page->id);
+
+        $step = $this->getMockBuilder(\restore_course_completion_structure_step::class)
+            ->setConstructorArgs(['test', null])
+            ->onlyMethods(['get_courseid', 'apply_date_offset', 'get_mappingid', 'log'])
+            ->getMock();
+
+        $step->method('get_courseid')->willReturn($course->id);
+        $step->method('apply_date_offset')->willReturnArgument(0);
+        $step->method('get_mappingid')->willReturn($cm->id);
+
+        // Expect debug log for skipping invalid criterion.
+        $step->expects($this->once())
+            ->method('log')
+            ->with(
+                'Module instance has completion tracking disabled, skipping invalid course completion criterion',
+                backup::LOG_DEBUG
+            );
+
+        $data = [
+            'criteriatype' => COMPLETION_CRITERIA_TYPE_ACTIVITY,
+            'module' => 'page',
+            'moduleinstance' => 99999, // Old instance id to map.
+            'timeend' => 0,
+        ];
+
+        $step->process_course_completion_criteria($data);
+
+        // Verify that no course completion criterion was inserted into DB.
+        $this->assertFalse($DB->record_exists('course_completion_criteria', [
+            'course' => $course->id,
+            'moduleinstance' => $cm->id,
+        ]));
+    }
+
+    /**
+     * Test process_course_completion_criteria successfully restores criterion when activity completion is enabled.
+     *
+     * @covers \restore_course_completion_structure_step::process_course_completion_criteria
+     */
+    public function test_process_course_completion_criteria_enabled_activity(): void {
+        global $DB;
+        $this->resetAfterTest();
+
+        $generator = $this->getDataGenerator();
+        $course = $generator->create_course(['enablecompletion' => 1]);
+
+        // Create page with automatic completion enabled.
+        $page = $generator->create_module('page', [
+            'course' => $course->id,
+            'completion' => COMPLETION_TRACKING_AUTOMATIC,
+            'completionview' => COMPLETION_VIEW_REQUIRED,
+        ]);
+        $cm = get_coursemodule_from_instance('page', $page->id);
+
+        $step = $this->getMockBuilder(\restore_course_completion_structure_step::class)
+            ->setConstructorArgs(['test', null])
+            ->onlyMethods(['get_courseid', 'apply_date_offset', 'get_mappingid', 'log', 'set_mapping'])
+            ->getMock();
+
+        $step->method('get_courseid')->willReturn($course->id);
+        $step->method('apply_date_offset')->willReturnArgument(0);
+        $step->method('get_mappingid')->willReturn($cm->id);
+
+        $data = [
+            'id' => 12345,
+            'criteriatype' => COMPLETION_CRITERIA_TYPE_ACTIVITY,
+            'module' => 'page',
+            'moduleinstance' => 88888, // Old instance id to map.
+            'courseinstance' => null,
+            'enrolperiod' => null,
+            'timeend' => 0,
+            'gradepass' => null,
+            'role' => null,
+        ];
+
+        $step->expects($this->once())
+            ->method('set_mapping')
+            ->with('course_completion_criteria', 12345, $this->greaterThan(0));
+
+        $step->process_course_completion_criteria($data);
+
+        // Verify that the course completion criterion was created in DB.
+        $this->assertTrue($DB->record_exists('course_completion_criteria', [
+            'course' => $course->id,
+            'moduleinstance' => $cm->id,
+            'criteriatype' => COMPLETION_CRITERIA_TYPE_ACTIVITY,
+        ]));
+    }
 }

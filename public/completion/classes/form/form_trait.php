@@ -126,6 +126,8 @@ trait form_trait {
         // Get the sufix to add to the completion elements name.
         $suffix = $this->get_suffix();
 
+        $mform->addElement('static', 'criterionwarning' . $suffix, '');
+
         $completionel = 'completion' . $suffix;
         $mform->addElement(
             'radio',
@@ -417,7 +419,8 @@ trait form_trait {
      * @param cm_info|null $cm The course module associated to this form.
      */
     protected function definition_after_data_completion(?cm_info $cm = null): void {
-        global $COURSE, $SITE;
+        global $CFG, $COURSE, $OUTPUT, $SITE;
+        require_once($CFG->dirroot . '/completion/criteria/completion_criteria_activity.php');
         $mform = $this->get_form();
 
         $completion = new \completion_info($COURSE);
@@ -464,6 +467,29 @@ trait form_trait {
                     );
                     $mform->insertElementBefore($completedwarningel, 'unlockcompletion');
                     $freeze = true;
+                }
+            }
+
+            // Check if this activity is currently used as a course completion criterion.
+            $warningel = 'criterionwarning' . $suffix;
+            if (
+                !$freeze
+                && !empty($cm)
+                && $COURSE->id != $SITE->id
+                && \completion_criteria_activity::is_course_criterion($cm->id, $COURSE->id)
+            ) {
+                if ($mform->elementExists($warningel)) {
+                    $mform->getElement($warningel)->setText(
+                        $OUTPUT->notification(
+                            get_string('activityiscoursecompletioncriterion', 'completion'),
+                            \core\output\notification::NOTIFY_WARNING,
+                            false
+                        )
+                    );
+                }
+            } else {
+                if ($mform->elementExists($warningel)) {
+                    $mform->removeElement($warningel);
                 }
             }
 
