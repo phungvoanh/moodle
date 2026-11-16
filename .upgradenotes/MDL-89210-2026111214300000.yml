@@ -1,0 +1,11 @@
+issueNumber: MDL-89210
+notes:
+  core_completion:
+    - message: >-
+        Disabling activity completion tracking for an activity now automatically
+        removes any associated course completion criteria, preventing hidden and
+        unsatisfiable criteria from blocking course completion. In addition, when
+        activity completion criteria are removed or updated, existing completed
+        course completions are preserved while incomplete records are flagged for
+        re-aggregation.
+      type: changed
