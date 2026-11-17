@@ -24,7 +24,14 @@ $drawer-anchored-header-bottom-gap: 0.5rem !default;
 $drawer-anchored-top-offset: calc(#{$navbar-height} + #{$drawer-anchored-top-gap} - #{$drawer-anchored-header-padding});
 $drawer-anchored-vertical-offset: calc(#{$drawer-anchored-top-offset} + #{$drawer-anchored-bottom-gap});
 $drawer-anchored-toggler-top: calc(#{$navbar-height} + #{$drawer-anchored-top-gap});
-$drawer-anchor-none: calc(50% + #{$course-content-maxwidth} / 2 + #{$drawer-main-gap});
+// Non-numeric none is invalid inside calc(), so fall back to 100% for anchor math.
+$drawer-content-maxwidth: if(
+    $course-content-maxwidth == none,
+    100%,
+    $course-content-maxwidth
+);
+$drawer-anchor-none: calc(50% + #{$drawer-content-maxwidth} / 2 + #{$drawer-main-gap});
+$drawer-anchor-closed: Min(#{$drawer-anchor-none}, 100%);
 // lg+: the page reserves room for each open drawer (layout.scss) and the drawers are anchored from that same
 // reserve, so the screen-edge gap, the drawer-to-content gap and the content width cannot drift apart.
 $drawer-edge-gap: var(--mds-spacing-lg, 1.25rem) !default;
@@ -49,7 +56,7 @@ $drawer-toggle-edge-anchor: calc(100% - #{$icon-medium-width} - #{$drawer-edge-g
 @function drawer-left-anchor($reserve-left, $reserve-right, $shift: null) {
     $tail: if($shift, " - #{$shift}", "");
     $edge: "calc(100% - #{$reserve-left} + #{$drawer-main-offset}#{$tail})";
-    $centred: "calc(50% + #{$course-content-maxwidth} / 2 + "
+    $centred: "calc(50% + #{$drawer-content-maxwidth} / 2 + "
         + "(#{$reserve-right} - #{$reserve-left}) / 2 + #{$drawer-main-offset}#{$tail})";
     @return unquote("Min(#{$edge}, #{$centred})");
 }
@@ -58,7 +65,7 @@ $drawer-toggle-edge-anchor: calc(100% - #{$icon-medium-width} - #{$drawer-edge-g
 @function drawer-right-anchor($reserve-left, $reserve-right, $shift: null) {
     $tail: if($shift, " - #{$shift}", "");
     $edge: "calc(100% - #{$reserve-right} + #{$drawer-main-offset}#{$tail})";
-    $centred: "calc(50% + #{$course-content-maxwidth} / 2 + "
+    $centred: "calc(50% + #{$drawer-content-maxwidth} / 2 + "
         + "(#{$reserve-left} - #{$reserve-right}) / 2 + #{$drawer-main-offset}#{$tail})";
     @return unquote("Min(#{$edge}, #{$centred})");
 }
@@ -356,7 +363,7 @@ $right-drawer-width: 320px;
 
         .drawer.drawer-left {
             left: auto;
-            right: $drawer-anchor-none;
+            right: $drawer-anchor-closed;
             width: 0;
             min-width: 0;
             max-width: $drawer-left-width;
@@ -366,7 +373,7 @@ $right-drawer-width: 320px;
 
             &.show {
                 left: auto;
-                right: $drawer-anchor-none;
+                right: $drawer-anchor-closed;
                 width: $drawer-left-width;
             }
 
@@ -377,7 +384,7 @@ $right-drawer-width: 320px;
 
         .drawer.drawer-right {
             right: auto;
-            left: $drawer-anchor-none;
+            left: $drawer-anchor-closed;
             width: $drawer-right-width;
             min-width: 0;
             max-width: $drawer-right-width;
@@ -387,7 +394,7 @@ $right-drawer-width: 320px;
 
             &.show {
                 right: auto;
-                left: $drawer-anchor-none;
+                left: $drawer-anchor-closed;
                 width: $drawer-right-width;
                 clip-path: inset(0 0 0 0);
 
