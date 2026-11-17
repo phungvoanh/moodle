@@ -109,6 +109,13 @@ export default class Component extends BaseComponent {
             {...this.selectors, ENTER: this.selectors.TITLE},
             this.reactive.isEditing
         );
+
+        this.contentTree.registerGroupToggleCallback((section, collapsed) => {
+            const sectionId = section.dataset.id;
+            if (sectionId) {
+                this.reactive.dispatch('sectionIndexCollapsed', [sectionId], collapsed);
+            }
+        });
     }
 
     getWatchers() {

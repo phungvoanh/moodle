@@ -69,6 +69,8 @@ export default class extends Tree {
         });
         // Register a custom callback for pressing enter key.
         this.registerEnterCallback(this.enterCallback.bind(this));
+        this.groupToggleCallback = null;
+        this._isHandlingClick = false;
     }
 
     /**
@@ -125,23 +127,37 @@ export default class extends Tree {
     }
 
     /**
+     * Register a callback for when a group is toggled via keyboard.
+     *
+     * @param {Function} callback Function called with (element, collapsed).
+     */
+    registerGroupToggleCallback(callback) {
+        this.groupToggleCallback = callback;
+    }
+
+    /**
      * Handle an item click.
      *
      * @param {Event} event the click event
      * @param {jQuery} jQueryItem the item clicked
      */
     handleItemClick(event, jQueryItem) {
-        const isChevron = event.target.closest(this.selectors.COLLAPSE);
-        // Only chevron clicks toogle the sections always.
-        if (isChevron) {
-            super.handleItemClick(event, jQueryItem);
-            return;
-        }
-        // This is a title or activity name click.
-        jQueryItem.focus();
-        // Titles with a link navigate. Only a toggler title (without a link) expands the group.
-        if (this.isGroupItem(jQueryItem) && event.target.closest(this.selectors.TOGGLER)) {
-            this.expandGroup(jQueryItem);
+        this._isHandlingClick = true;
+        try {
+            const isChevron = event.target.closest(this.selectors.COLLAPSE);
+            // Only chevron clicks toogle the sections always.
+            if (isChevron) {
+                super.handleItemClick(event, jQueryItem);
+                return;
+            }
+            // This is a title or activity name click.
+            jQueryItem.focus();
+            // Titles with a link navigate. Only a toggler title (without a link) expands the group.
+            if (this.isGroupItem(jQueryItem) && event.target.closest(this.selectors.TOGGLER)) {
+                this.expandGroup(jQueryItem);
+            }
+        } finally {
+            this._isHandlingClick = false;
         }
     }
 
@@ -163,7 +179,8 @@ export default class extends Tree {
      * @param {JQuery} item  the jQuery object
      */
     toggleGroup(item) {
-        const toggler = getFirst(item).querySelector(this.selectors.COLLAPSE);
+        const element = getFirst(item);
+        const toggler = element.querySelector(this.selectors.COLLAPSE);
         let collapsibleId = toggler.dataset?.target ?? toggler.getAttribute('href');
         if (!collapsibleId) {
             return;
@@ -172,7 +189,12 @@ export default class extends Tree {
 
         const collapsible = document.getElementById(collapsibleId);
         if (collapsible) {
+            const wasCollapsed = this.isGroupCollapsed(item);
+
             Collapse.getOrCreateInstance(collapsible).toggle();
+            if (!this._isHandlingClick && typeof this.groupToggleCallback === 'function') {
+                this.groupToggleCallback(element, !wasCollapsed);
+            }
         }
     }
 
