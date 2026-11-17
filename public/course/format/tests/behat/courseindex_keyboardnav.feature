@@ -134,3 +134,39 @@ Feature: Verify that courseindex is usable with the keyboard
     Then  I should see "Activity sample 1" in the "courseindex-content" "region"
     And I should see "Activity sample 2" in the "courseindex-content" "region"
     And I should see "Activity sample 3" in the "courseindex-content" "region"
+
+  @javascript
+  Scenario: Opening and closing subsections keeps the focus on the subsection.
+    # The subsection delegated section is numbered 4, so the page is created inside the subsection.
+    Given the following "activities" exist:
+      | activity   | name                 | course | idnumber    | section |
+      | subsection | Subsection 1         | C1     | subsection1 | 1       |
+      | page       | Page in Subsection 1 | C1     | page1       | 4       |
+    And I reload the page
+    And I click on "Close course index" "button"
+    And I click on "Open course index" "button"
+    And the focused element is "[data-preference='drawer-open-index'] .drawertoggle" "css_element"
+    And I press the tab key
+    And the focused element is ".courseindex-collapsemenu" "css_element"
+    And I press the tab key
+    And the focused element is ".courseindex-section" "css_element"
+       # General section is focused. Move to Section 1, its activity and then to the subsection.
+    And I press the down key
+    And I press the down key
+    And I press the down key
+    And I should see "Page in Subsection 1" in the "courseindex-content" "region"
+    And the focused element is "[data-for='cm'][aria-owns]" "css_element"
+    # Close the subsection with one left key. The focus must remain in the subsection.
+    When I press the left key
+    Then I should not see "Page in Subsection 1" in the "courseindex-content" "region"
+    And the focused element is "[data-for='cm'][aria-owns]" "css_element"
+    # Open it with one right key. The focus must remain in the subsection.
+    When I press the right key
+    Then I should see "Page in Subsection 1" in the "courseindex-content" "region"
+    And the focused element is "[data-for='cm'][aria-owns]" "css_element"
+    # A second right key moves the focus to the first child.
+    When I press the right key
+    Then the focused element is "[data-for='cm'][aria-owns] [data-for='cm']" "css_element"
+    # A left key from the child moves the focus back to the subsection.
+    When I press the left key
+    Then the focused element is "[data-for='cm'][aria-owns]" "css_element"
