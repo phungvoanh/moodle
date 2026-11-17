@@ -354,7 +354,13 @@ define(['jquery'], function($) {
      // This function should be simplified. In the meantime..
      // eslint-disable-next-line complexity
     Tree.prototype.handleKeyDown = function(e) {
-        var item = $(e.target);
+        // The handler is delegated to every tree item, so a nested item receives the same event once per
+        // ancestor item. Only handle it when this is the closest tree item to the event target.
+        var item = $(e.target).closest(SELECTORS.ITEM);
+        if (!item.is(e.currentTarget)) {
+            return;
+        }
+
         var currentIndex = this.getVisibleItems()?.index(item);
 
         if ((e.altKey || e.ctrlKey || e.metaKey) || (e.shiftKey && e.keyCode != this.keys.tab)) {
