@@ -103,6 +103,13 @@ export default class Component extends BaseComponent {
 
         // Configure Aria Tree.
         this.contentTree = new ContentTree(this.element, this.selectors, this.reactive.isEditing);
+
+        this.contentTree.registerGroupToggleCallback((section, collapsed) => {
+            const sectionId = section.dataset.id;
+            if (sectionId) {
+                this.reactive.dispatch('sectionIndexCollapsed', [sectionId], collapsed);
+            }
+        });
     }
 
     getWatchers() {

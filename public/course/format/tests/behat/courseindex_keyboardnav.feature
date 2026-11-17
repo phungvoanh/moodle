@@ -129,3 +129,31 @@ Feature: Verify that courseindex is usable with the keyboard
     Then  I should see "Activity sample 1" in the "courseindex-content" "region"
     And I should see "Activity sample 2" in the "courseindex-content" "region"
     And I should see "Activity sample 3" in the "courseindex-content" "region"
+
+  @javascript
+  Scenario: Collapse-all toggle updates when all sections are collapsed via keyboard.
+    Given the "aria-expanded" attribute of ".courseindex-collapsemenu" "css_element" should contain "true"
+    # Collapse General (section 0) and sections 1, 2, 3 with Left Arrow.
+    When I press the left key
+    And I press the down key
+    And I press the left key
+    And I press the down key
+    And I press the left key
+    And I press the down key
+    And I press the left key
+    And I press the shift tab key
+    Then the focused element is ".courseindex-collapsemenu" "css_element"
+    And I should see "Expand all" in the ".courseindex-collapsemenu" "css_element"
+    And the "aria-expanded" attribute of ".courseindex-collapsemenu" "css_element" should contain "false"
+
+  @javascript
+  Scenario: Expand-all toggle updates when one collapsed section is expanded via keyboard.
+    Given I press the shift tab key
+    And the focused element is ".courseindex-collapsemenu" "css_element"
+    And I press enter
+    And I should see "Expand all" in the ".courseindex-collapsemenu" "css_element"
+    And the "aria-expanded" attribute of ".courseindex-collapsemenu" "css_element" should contain "false"
+    When I press the tab key
+    And I press the right key
+    Then I should see "Collapse all" in the ".courseindex-collapsemenu" "css_element"
+    And the "aria-expanded" attribute of ".courseindex-collapsemenu" "css_element" should contain "true"
