@@ -69,12 +69,21 @@ Feature: Course index depending on role
     And I set the field "Course full name" to "<span lang=\"en\" class=\"multilang\">My course</span><span lang=\"es\" class=\"multilang\">Mi curso</span>"
     And I press "Save and display"
     # Course title should be displayed in the course index heading.
-    And I should see "My course" in the "courseindexdrawerheading" "region"
+    And "h2#courseindexdrawerheading" "css_element" should exist
+    And "#theme_boost-drawers-courseindex[role='navigation'][aria-labelledby='courseindexdrawerheading']" "css_element" should exist
+    And I should see "My course" in the "#courseindexdrawerheading" "css_element"
     And I click on "Activity sample 1" "link" in the "#courseindex" "css_element"
     And I should not see "Activity sample 2" in the "region-main" "region"
     # Check course title link goes to the course main page.
-    When I click on "My course" "link" in the "courseindexdrawerheading" "region"
+    When I click on "My course" "link" in the "#courseindexdrawerheading" "css_element"
     Then I should see "Activity sample 2" in the "region-main" "region"
+
+  @javascript @accessibility
+  Scenario: Course index drawer meets accessibility standards
+    Given I am on the "C1" "Course" page logged in as "teacher1"
+    Then "h2#courseindexdrawerheading" "css_element" should exist
+    And "#theme_boost-drawers-courseindex[role='navigation'][aria-labelledby='courseindexdrawerheading']" "css_element" should exist
+    And the page should meet accessibility standards with "best-practice" extra tests
 
   @javascript
   Scenario: Course index as a teacher

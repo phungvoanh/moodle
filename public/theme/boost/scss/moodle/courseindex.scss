@@ -50,6 +50,7 @@ $courseindex-completion-glyph-xmark: url("data:image/svg+xml,<svg xmlns='http://
         flex: 1 1 auto;
         #courseindexdrawerheading {
             font-size: $font-size-base;
+            line-height: inherit;
             margin-left: map-get($spacers, 4);
             min-width: 0;
             overflow: hidden;
