@@ -1,0 +1,22 @@
+issueNumber: MDL-89762
+notes:
+  theme_boost:
+    - message: >-
+        A new `{{$drawerattributes}}` template block has been added to the
+        `theme_boost/drawer` template, allowing callers to pass arbitrary HTML
+        and ARIA attributes to the drawer container element. This block is
+        optional and default behavior is unchanged when omitted.
+      type: improved
+    - message: >-
+        The course index drawer container in `theme_boost/drawers` now acts as the
+        navigation landmark with `role="navigation"` and `aria-labelledby="courseindexdrawerheading"`.
+        The course title link in `theme_boost/courseindexdrawerheading` is now rendered
+        as an `<h2>` heading element.
+      type: improved
+  core_courseformat:
+    - message: >-
+        The inner `<nav id="courseindex">` element in `core_courseformat/local/courseindex/drawer`
+        has been changed to a `<div>` element to avoid nested navigation landmarks within
+        the course index drawer. Any custom styles or scripts specifically targeting
+        `nav#courseindex` should be updated to `#courseindex`.
+      type: changed
