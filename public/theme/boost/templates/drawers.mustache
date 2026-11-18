@@ -61,6 +61,8 @@
     {{#courseindex}}
         {{< theme_boost/drawer }}
             {{$id}}theme_boost-drawers-courseindex{{/id}}
+            {{! The landmark wraps the heading so axe "region" passes; do not move it back to #courseindex. }}
+            {{$drawerattributes}}role="navigation" aria-labelledby="courseindexdrawerheading"{{/drawerattributes}}
             {{$drawerheading}}{{> theme_boost/courseindexdrawerheading}}{{/drawerheading}}
             {{$drawercontrols}}{{> theme_boost/courseindexdrawercontrols}}{{/drawercontrols}}
             {{$drawerclasses}}drawer drawer-left {{#courseindexopen}}show{{/courseindexopen}}{{/drawerclasses}}

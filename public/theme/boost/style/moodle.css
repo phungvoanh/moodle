@@ -46577,6 +46577,7 @@ div.editor_atto_toolbar button .icon {
 }
 .drawerheader .drawerheading #courseindexdrawerheading {
   font-size: 1rem;
+  line-height: inherit;
   margin-left: 1.5rem;
   min-width: 0;
   overflow: hidden;

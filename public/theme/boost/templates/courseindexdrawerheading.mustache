@@ -18,6 +18,7 @@
     @template theme_boost/courseindexdrawerheading
 
     This template will render the heading for the course index drawer.
+    The id="courseindexdrawerheading" is referenced by the course index drawer's aria-labelledby attribute.
 
     Example context (json):
     {
@@ -25,8 +26,8 @@
         "courseurl": "http://example.com/course/view.php?id=2"
     }
 }}
-<div id="courseindexdrawerheading">
-    <a class="aabtn m-1 courseindex-link text-truncate fw-bold" href="{{courseurl}}">
+<h2 id="courseindexdrawerheading" class="mb-0">
+    <a class="aabtn courseindex-link text-truncate fw-bold" href="{{courseurl}}">
         {{coursefullname}}
     </a>
-</div>
+</h2>
