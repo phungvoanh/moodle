@@ -29,6 +29,7 @@ require_once($CFG->dirroot . '/question/format.php');
 require_once($CFG->dirroot . '/question/renderer.php');
 
 use qbank_importquestions\form\question_import_form;
+use qbank_importquestions\helper;
 
 require_login();
 core_question\local\bank\helper::require_plugin_enabled('qbank_importquestions');
@@ -88,7 +89,9 @@ if ($form = $importform->get_data()) {
     // Work out if this is an uploaded file.
     // Or one from the filesarea.
     $realfilename = $importform->get_new_filename('newfile');
-    $importfile = make_request_directory() . "/{$realfilename}";
+    // Keep the temporary filename within the filesystem byte limit; the importer still receives the original name.
+    $importfilename = helper::get_safe_import_filename($realfilename);
+    $importfile = make_request_directory() . "/{$importfilename}";
     if (!$result = $importform->save_file('newfile', $importfile, true)) {
         throw new moodle_exception('uploadproblem');
     }
