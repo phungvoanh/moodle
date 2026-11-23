@@ -48,6 +48,27 @@ abstract class restore_qtype_plugin extends restore_plugin {
     private $questionanswercacheid = null;
 
     /**
+     * Whether backup-encoded keys have been added to the current question answer cache.
+     *
+     * @var bool
+     */
+    private bool $questionanswercacheencoded = false;
+
+    /**
+     * Cached backup XML transformer used to match encoded answer links.
+     *
+     * @var backup_xml_transformer|null
+     */
+    private ?backup_xml_transformer $answertransformer = null;
+
+    /**
+     * Dedicated link decoder used as a fallback when matching existing question answers.
+     *
+     * @var restore_decode_processor|null
+     */
+    private ?restore_decode_processor $answerdecoder = null;
+
+    /**
      * @var array List of fields to exclude form hashing during restore.
      */
     protected array $excludedhashfields = [];
@@ -195,6 +216,7 @@ abstract class restore_qtype_plugin extends restore_plugin {
                 $params = array('question' => $newquestionid);
                 $answers = $DB->get_records('question_answers', $params, '', 'id, answer');
                 $this->questionanswercacheid = $newquestionid;
+                $this->questionanswercacheencoded = false;
                 // Cache all cleaned answers for a simple text match.
                 foreach ($answers as $answer) {
                     $clean = core_text::trim_ctrl_chars($answer->answer); // Clean CTRL chars.
@@ -203,30 +225,17 @@ abstract class restore_qtype_plugin extends restore_plugin {
                 }
             }
 
-            $rules = restore_course_task::define_decode_rules();
-            $rulesactivity = restore_quiz_activity_task::define_decode_rules();
-            $rules = array_merge($rules, $rulesactivity);
-
-            $decoder = $this->task->get_decoder();
-            foreach ($rules as $rule) {
-                $decoder->add_rule($rule);
-            }
-
-            $contentdecoded = $decoder->decode_content($data->answertext);
-            if ($contentdecoded) {
-                $data->answertext = $contentdecoded;
-            }
-
-            if (!isset($this->questionanswercache[$data->answertext])) {
+            $answertext = (string) ($data->answertext ?? '');
+            $newitemid = $this->match_cached_question_answer($answertext);
+            if ($newitemid === null) {
                 // If we haven't found the matching answer, something has gone really wrong, the question in the DB
                 // is missing answers, throw an exception.
                 $info = new stdClass();
                 $info->filequestionid = $oldquestionid;
                 $info->dbquestionid   = $newquestionid;
-                $info->answer         = s($data->answertext);
+                $info->answer         = s($answertext);
                 throw new restore_step_exception('error_question_answers_missing_in_db', $info);
             }
-            $newitemid = $this->questionanswercache[$data->answertext];
         }
         // Create mapping (we'll use this intensively when restoring question_states. And also answerfeedback files)
         $this->set_mapping('question_answer', $oldid, $newitemid);
@@ -635,5 +644,101 @@ abstract class restore_qtype_plugin extends restore_plugin {
             }
         }
         return $data;
+    }
+
+    /**
+     * Find the existing question_answers.id matching the backup answer text.
+     *
+     * @param string $answertext The answer text from the backup (updated if decoded during fallback).
+     * @return int|null The matching question_answers.id, or null if not found.
+     */
+    private function match_cached_question_answer(string &$answertext): ?int {
+        if (isset($this->questionanswercache[$answertext])) {
+            // Fast path: plain DB answer or an encoded key already cached for this question.
+            return (int) $this->questionanswercache[$answertext];
+        }
+
+        $transformer = $this->get_answer_xml_transformer();
+        if (!$this->questionanswercacheencoded) {
+            // Lazily cache backup-encoded forms only when a plain lookup misses.
+            foreach ($this->questionanswercache as $clean => $answerid) {
+                $cleanstr = (string) $clean;
+                $encoded = $transformer->process($cleanstr);
+                if ($encoded !== $cleanstr && !isset($this->questionanswercache[$encoded])) {
+                    $this->questionanswercache[$encoded] = $answerid;
+                }
+            }
+            $this->questionanswercacheencoded = true;
+        }
+
+        if (isset($this->questionanswercache[$answertext])) {
+            return (int) $this->questionanswercache[$answertext];
+        }
+
+        // Re-encode the incoming answer text to match the cached backup-encoded DB form before
+        // falling back to full link decoding. This is required when process_cdata() decodes
+        // $@FILEPHP@$ into the current $CFG->slasharguments format while the DB retains another
+        // legacy file.php form (e.g. ?file=/... vs /file.php/...), which restore_decode_processor
+        // has no rule to match. It also matches answers mixing process_cdata()-decoded URLs
+        // ($@FILEPHP@$ / $@H5PEMBED@$) with encoded activity placeholders without invoking the
+        // fallback decoder or remapping IDs away from the reused question's DB answer.
+        $encodedanswer = $transformer->process($answertext);
+        if (isset($this->questionanswercache[$encodedanswer])) {
+            return (int) $this->questionanswercache[$encodedanswer];
+        }
+
+        // Fallback to full link decoding (e.g. cross-site restore where DB answers retain
+        // the source site's wwwroot or already-remapped target IDs).
+        $contentdecoded = $this->get_answer_decoder()->decode_content($answertext);
+        if ($contentdecoded !== false) {
+            $answertext = $contentdecoded;
+            if (isset($this->questionanswercache[$answertext])) {
+                return (int) $this->questionanswercache[$answertext];
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Return a cached backup XML transformer for the current target course.
+     *
+     * @return backup_xml_transformer
+     */
+    private function get_answer_xml_transformer(): backup_xml_transformer {
+        global $CFG;
+
+        if ($this->answertransformer === null) {
+            // Mirror restore_dbops::get_backup_xml_transformer() (which is protected, avoiding an
+            // unnecessary visibility change) and cache the transformer per plugin instance. Load
+            // all backup activity and block tasks before constructing the transformer, otherwise
+            // register_link_encoders() caches an incomplete encoder list in $LINKS_ENCODERS_CACHE.
+            require_once($CFG->dirroot . '/backup/util/includes/backup_includes.php');
+            require_once($CFG->dirroot . '/backup/moodle2/backup_plan_builder.class.php');
+            $this->answertransformer = new backup_xml_transformer((int) $this->task->get_courseid());
+        }
+        return $this->answertransformer;
+    }
+
+    /**
+     * Return a dedicated link decoder populated with all available decode rules.
+     *
+     * Kept separate from the restore plan decoder so repeated answer processing does not
+     * accumulate duplicate rules on the shared plan decoder.
+     *
+     * @return restore_decode_processor
+     */
+    private function get_answer_decoder(): restore_decode_processor {
+        global $CFG;
+
+        if ($this->answerdecoder === null) {
+            $this->answerdecoder = new restore_decode_processor(
+                $this->task->get_restoreid(),
+                $this->task->get_info()->original_wwwroot,
+                $CFG->wwwroot,
+            );
+            restore_decode_processor::register_link_decoders($this->answerdecoder);
+        }
+        return $this->answerdecoder;
     }
 }
