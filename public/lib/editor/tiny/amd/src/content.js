@@ -28,15 +28,29 @@
  */
 export const addMathMLSupport = (editor) => {
     const getNodeType = (node) => {
-        const style = node.attr('style');
-        if (style?.includes('display')) {
-            if (style.match(/display:[^;]*inline/)) {
-                return 'tiny-math-span';
-            }
+        // At root level (direct child of body), always use a block wrapper so TinyMCE
+        // does not receive a bare inline contenteditable="false" node outside a root block
+        // (which causes Firefox to insert extraneous <br> elements).
+        if (!node.parent || node.parent.name === 'body' || node.parent.name === '#document') {
+            return 'tiny-math-block';
         }
-        return 'tiny-math-block';
+        // Prefer the standard MathML display attribute over inline CSS.
+        const display = node.attr('display')?.toLowerCase();
+        if (display === 'block') {
+            return 'tiny-math-block';
+        }
+        if (display === 'inline') {
+            return 'tiny-math-span';
+        }
+        const style = node.attr('style');
+        const match = /display\s*:\s*(block|inline)/i.exec(style ?? '');
+        if (match) {
+            return match[1].toLowerCase() === 'block' ? 'tiny-math-block' : 'tiny-math-span';
+        }
+        // Inside a block or phrasing container (e.g. <p>), default to an inline wrapper
+        // so the parent block is not split and MathML Core's inline default is preserved.
+        return 'tiny-math-span';
     };
-
 
     editor.on('PreInit', () => {
         editor.schema.addCustomElements({
@@ -45,7 +59,18 @@ export const addMathMLSupport = (editor) => {
             // Any invalid markup will be accepted.
             // Note: We use the same names as the Tiny Premium Math plugin to avoid conflicts if both are enabled.
             math: {
-                'extends': 'div',
+                'extends': 'span',
+                'attributes': [
+                    '@global',
+                    'display',
+                    'displaystyle',
+                    'xmlns',
+                    'mathbackground',
+                    'mathcolor',
+                    'mathsize',
+                    'mathvariant',
+                    'scriptlevel',
+                ],
             },
             'tiny-math-span': {
                 'extends': "span",
@@ -58,8 +83,12 @@ export const addMathMLSupport = (editor) => {
         // Add a Parser filter to wrap math nodes in a tiny-math-[block|span] element.
         editor.parser.addNodeFilter('math', (nodes) => nodes.forEach((node) => {
             if (node.parent) {
-                if (node.parent.name === 'tiny-math-block' || node.parent.name === 'tiny-math-span') {
-                    // Already wrapped.
+                if (
+                    node.parent.name === 'tiny-math-block' ||
+                    node.parent.name === 'tiny-math-span' ||
+                    node.parent.name === 'tiny-math-inline'
+                ) {
+                    // Already wrapped (tiny-math-inline is used by the TinyMCE Premium Math plugin).
                     return;
                 }
             }
@@ -70,17 +99,8 @@ export const addMathMLSupport = (editor) => {
             }));
         }));
 
-        // Add a Serializer filter to remove the tiny-math-[block|span] wrapper.
-        editor.serializer.addNodeFilter('tiny-math-span, tiny-math-block', (nodes, name) => nodes.forEach((node) => {
-            const displayMode = name.replace('tiny-math-', '');
-            node.children().forEach((child) => {
-                const currentStyle = child.attr('style');
-                if (currentStyle) {
-                    child.attr('style', `${currentStyle};display: ${displayMode}`);
-                } else {
-                    child.attr('style', `display: ${displayMode}`);
-                }
-            });
+        // Add a Serializer filter to unwrap the temporary tiny-math-[block|span] wrapper without injecting inline display styles.
+        editor.serializer.addNodeFilter('tiny-math-span, tiny-math-block', (nodes) => nodes.forEach((node) => {
             node.unwrap();
         }));
     });

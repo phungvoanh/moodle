@@ -25,8 +25,11 @@ body.mce-content-body a {
 
 .mce-content-body p > math,
 .mce-content-body p > svg {
-    display: inline-block;
     outline: 3px solid #b4d7ff;
+}
+
+.mce-content-body p > svg {
+    display: inline-block;
 }
 
 /* The editor content is a separate document, and editor_tiny repeats the colour mode attribute on its root. These
