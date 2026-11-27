@@ -2108,7 +2108,7 @@ class core_admin_renderer extends plugin_renderer_base {
         $servertable->attributes['class'] = 'table table-striped admintable environmenttable generaltable table-sm table-hover';
         $servertable->id = 'serverstatus';
 
-        $serverdata = array('ok'=>array(), 'warn'=>array(), 'error'=>array());
+        $serverdata = ['ok' => [], 'info' => [], 'warn' => [], 'error' => []];
 
         $othertable = new html_table();//table for custom checks
         $othertable->head  = array(
@@ -2121,13 +2121,14 @@ class core_admin_renderer extends plugin_renderer_base {
         $othertable->attributes['class'] = 'table table-striped admintable environmenttable generaltable table-sm table-hover';
         $othertable->id = 'otherserverstatus';
 
-        $otherdata = array('ok'=>array(), 'warn'=>array(), 'error'=>array());
+        $otherdata = ['ok' => [], 'info' => [], 'warn' => [], 'error' => []];
 
         // Iterate over each environment_result
         $continue = true;
         foreach ($environment_results as $environment_result) {
             $errorline   = false;
             $warningline = false;
+            $infoline = false;
             $stringtouse = '';
             if ($continue) {
                 $type = $environment_result->getPart();
@@ -2135,6 +2136,8 @@ class core_admin_renderer extends plugin_renderer_base {
                 $status = $environment_result->getStatus();
                 $plugin = $environment_result->getPluginName();
                 $error_code = $environment_result->getErrorCode();
+                // phpcs:ignore moodle.NamingConventions.ValidVariableName.VariableNameUnderscore
+                $skipped = $environment_result->is_skipped();
                 // Process Report field
                 $rec = new stdClass();
                 // Something has gone wrong at parsing time
@@ -2147,7 +2150,10 @@ class core_admin_renderer extends plugin_renderer_base {
                 }
 
                 if ($continue) {
-                    if ($rec->needed = $environment_result->getNeededVersion()) {
+                    if ($skipped) {
+                        $stringtouse = 'environmentskippedcustomcheck';
+                        // phpcs:ignore moodle.NamingConventions.ValidVariableName.VariableNameUnderscore
+                    } else if ($rec->needed = $environment_result->getNeededVersion()) {
                         // We are comparing versions
                         $rec->current = $environment_result->getCurrentVersion();
                         if ($environment_result->getLevel() == 'required') {
@@ -2184,7 +2190,12 @@ class core_admin_renderer extends plugin_renderer_base {
                     }
 
                     // Calculate the status value
-                    if ($environment_result->getBypassStr() != '') {            //Handle bypassed result (warning)
+                    if ($skipped) {
+                        $status = get_string('skipped');
+                        $infoline = true;
+                        // phpcs:ignore moodle.NamingConventions.ValidVariableName.VariableNameUnderscore
+                    } else if ($environment_result->getBypassStr() != '') {
+                        // Handle bypassed result (warning).
                         $status = get_string('bypassed');
                         $warningline = true;
                     } else if ($environment_result->getRestrictStr() != '') {   //Handle restricted result (error)
@@ -2207,11 +2218,12 @@ class core_admin_renderer extends plugin_renderer_base {
                 }
 
                 // Build the text
-                $linkparts = array();
-                $linkparts[] = 'admin/environment';
-                $linkparts[] = $type;
-                if (!empty($info)){
-                   $linkparts[] = $info;
+                $linkparts = ['admin/environment'];
+                if (!$skipped) {
+                    $linkparts[] = $type;
+                    if (!empty($info)) {
+                        $linkparts[] = $info;
+                    }
                 }
                 // Plugin environments do not have docs pages yet.
                 if (empty($CFG->docroot) or $environment_result->plugin) {
@@ -2229,6 +2241,10 @@ class core_admin_renderer extends plugin_renderer_base {
                     $messagetype = 'warn';
                     $statusclass = 'bg-warning text-dark';
                     $feedbackclass = 'alert-warning';
+                } else if ($infoline) {
+                    $messagetype = 'info';
+                    $statusclass = 'text-bg-info';
+                    $feedbackclass = 'alert-info';
                 } else {
                     $messagetype = 'ok';
                     $statusclass = 'bg-success text-white';
@@ -2249,6 +2265,10 @@ class core_admin_renderer extends plugin_renderer_base {
 
                 $report .= $feedbacktext;
 
+                if ($skipped) {
+                    $info = s($info);
+                }
+
                 // Add the row to the table
                 if ($environment_result->getPart() == 'custom_check'){
                     $otherdata[$messagetype][] = array ($info, $report, $plugin, $status);
@@ -2259,8 +2279,8 @@ class core_admin_renderer extends plugin_renderer_base {
         }
 
         //put errors first in
-        $servertable->data = array_merge($serverdata['error'], $serverdata['warn'], $serverdata['ok']);
-        $othertable->data = array_merge($otherdata['error'], $otherdata['warn'], $otherdata['ok']);
+        $servertable->data = array_merge($serverdata['error'], $serverdata['warn'], $serverdata['info'], $serverdata['ok']);
+        $othertable->data = array_merge($otherdata['error'], $otherdata['warn'], $otherdata['info'], $otherdata['ok']);
 
         // Print table
         $output = '';

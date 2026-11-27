@@ -26,7 +26,21 @@ use environment_results;
  * @copyright  2013 Petr Skoda {@link http://skodak.org}
  * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
  */
+#[\PHPUnit\Framework\Attributes\CoversClass(environment_results::class)]
+#[\PHPUnit\Framework\Attributes\CoversFunction('check_moodle_environment')]
+#[\PHPUnit\Framework\Attributes\CoversFunction('environment_custom_checks')]
+#[\PHPUnit\Framework\Attributes\CoversFunction('environment_get_errors')]
+#[\PHPUnit\Framework\Attributes\CoversFunction('environment_verify_plugin')]
+#[\PHPUnit\Framework\Attributes\CoversFunction('get_list_of_environment_versions')]
+#[\PHPUnit\Framework\Attributes\CoversFunction('restrict_php_version')]
 final class environmentlib_test extends \advanced_testcase {
+    #[\Override]
+    public static function setUpBeforeClass(): void {
+        parent::setUpBeforeClass();
+        global $CFG;
+        require_once($CFG->libdir . '/environmentlib.php');
+    }
+
     /**
      * Test the environment check status.
      */
@@ -261,5 +275,219 @@ END;
             restrict_php_version($result, $restrictedversion),
             'restrict_php_version returns false if the current version is less than the restricted version'
         );
+    }
+
+    /**
+     * Write an environment.xml fixture into dataroot for custom check tests.
+     *
+     * @return string Path to the created environment.xml file.
+     */
+    private function create_custom_checks_environment_xml(): string {
+        global $CFG;
+
+        $envdir = $CFG->dataroot . '/environment';
+        if (!is_dir($envdir)) {
+            mkdir($envdir, $CFG->directorypermissions, true);
+        }
+
+        $xml = <<<'END'
+<?xml version="1.0" encoding="UTF-8"?>
+<COMPATIBILITY_MATRIX>
+  <MOODLE version="1.0" requires="1.0">
+    <UNICODE level="required" />
+    <DATABASE level="required">
+      <VENDOR name="mariadb" version="1.0" />
+      <VENDOR name="mysql" version="1.0" />
+      <VENDOR name="postgres" version="1.0" />
+      <VENDOR name="mssql" version="1.0" />
+      <VENDOR name="auroramysql" version="1.0" />
+    </DATABASE>
+    <PHP version="7.0.0" level="required" />
+    <PHP_EXTENSIONS>
+      <PHP_EXTENSION name="json" level="required" />
+    </PHP_EXTENSIONS>
+    <CUSTOM_CHECKS>
+      <CUSTOM_CHECK function="\core\nonexistent_current_environment::check_missing_fn" level="optional" />
+      <CUSTOM_CHECK file="lib/nonexistent_current_file.php" function="check_missing_file" level="optional" />
+    </CUSTOM_CHECKS>
+  </MOODLE>
+  <MOODLE version="99.1" requires="4.0">
+    <UNICODE level="required" />
+    <DATABASE level="required">
+      <VENDOR name="mariadb" version="1.0" />
+      <VENDOR name="mysql" version="1.0" />
+      <VENDOR name="postgres" version="1.0" />
+      <VENDOR name="mssql" version="1.0" />
+      <VENDOR name="auroramysql" version="1.0" />
+    </DATABASE>
+    <PHP version="7.0.0" level="required" />
+    <PHP_EXTENSIONS>
+      <PHP_EXTENSION name="json" level="required" />
+    </PHP_EXTENSIONS>
+    <CUSTOM_CHECKS>
+      <CUSTOM_CHECK function="\core\nonexistent_future_environment::check_future_composer" level="optional" />
+      <CUSTOM_CHECK function="\core\nonexistent_future_environment::check_future_router" level="required">
+        <FEEDBACK>
+          <ON_ERROR message="nonexistentfuturelangstring" />
+        </FEEDBACK>
+      </CUSTOM_CHECK>
+      <CUSTOM_CHECK file="lib/nonexistent_future_file.php" function="check_future_missing_file" level="optional">
+        <FEEDBACK>
+          <ON_CHECK message="nonexistentfuturelangstring2" />
+        </FEEDBACK>
+      </CUSTOM_CHECK>
+      <CUSTOM_CHECK file="lib/upgradelib.php" function="check_nonexistent_future_upgradelib_fn" level="optional" />
+    </CUSTOM_CHECKS>
+  </MOODLE>
+</COMPATIBILITY_MATRIX>
+END;
+
+        $xmlpath = $envdir . '/environment.xml';
+        file_put_contents($xmlpath, $xml);
+        return $xmlpath;
+    }
+
+    /**
+     * Test that missing custom checks for a future version are returned as skipped instead of hidden.
+     */
+    #[\PHPUnit\Framework\Attributes\RunInSeparateProcess]
+    public function test_environment_custom_checks_future_version_skipped(): void {
+        global $CFG;
+        require_once($CFG->libdir . '/environmentlib.php');
+
+        $this->resetAfterTest();
+        $xmlpath = $this->create_custom_checks_environment_xml();
+
+        try {
+            $results = environment_custom_checks('99.1', ENV_SELECT_DATAROOT);
+            $this->assertCount(4, $results);
+
+            $expected = [
+                [
+                    'info' => '\core\nonexistent_future_environment::check_future_composer',
+                    'level' => 'optional',
+                ],
+                [
+                    'info' => '\core\nonexistent_future_environment::check_future_router',
+                    'level' => 'required',
+                ],
+                [
+                    'info' => 'check_future_missing_file',
+                    'level' => 'optional',
+                ],
+                [
+                    'info' => 'check_nonexistent_future_upgradelib_fn',
+                    'level' => 'optional',
+                ],
+            ];
+
+            foreach ($results as $index => $result) {
+                $this->assertTrue($result->is_skipped());
+                $this->assertFalse($result->getStatus());
+                $this->assertSame(NO_ERROR, $result->getErrorCode());
+                $this->assertSame($expected[$index]['info'], $result->getInfo());
+                $this->assertSame($expected[$index]['level'], $result->getLevel());
+                $this->assertSame(
+                    ['environmentfuturecustomcheckskipped', 'admin', '99.1'],
+                    $result->getFeedbackStr()
+                );
+            }
+
+            // Calling with an unnormalized version string should normalize and yield the same skipped results.
+            $normalizedresults = environment_custom_checks('99.1dev', ENV_SELECT_DATAROOT);
+            $this->assertCount(4, $normalizedresults);
+            foreach ($normalizedresults as $index => $result) {
+                $this->assertTrue($result->is_skipped());
+                $this->assertFalse($result->getStatus());
+                $this->assertSame(NO_ERROR, $result->getErrorCode());
+                $this->assertSame($expected[$index]['info'], $result->getInfo());
+                $this->assertSame($expected[$index]['level'], $result->getLevel());
+                $this->assertSame(
+                    ['environmentfuturecustomcheckskipped', 'admin', '99.1'],
+                    $result->getFeedbackStr()
+                );
+            }
+        } finally {
+            if (file_exists($xmlpath)) {
+                unlink($xmlpath);
+            }
+        }
+    }
+
+    /**
+     * Test that skipped future custom checks do not block check_moodle_environment() or produce errors.
+     */
+    #[\PHPUnit\Framework\Attributes\RunInSeparateProcess]
+    public function test_check_moodle_environment_future_skipped_checks_do_not_block(): void {
+        global $CFG;
+        require_once($CFG->libdir . '/environmentlib.php');
+
+        $this->resetAfterTest();
+        $xmlpath = $this->create_custom_checks_environment_xml();
+
+        try {
+            [$status, $results] = check_moodle_environment('99.1', ENV_SELECT_DATAROOT);
+            $this->assertTrue($status);
+            $this->assertEmpty(environment_get_errors($results));
+
+            $skipped = array_values(array_filter(
+                $results,
+                static fn(environment_results $result): bool => $result->is_skipped()
+            ));
+            $this->assertCount(4, $skipped);
+
+            $infos = array_map(
+                static fn(environment_results $result): string => $result->getInfo(),
+                $skipped
+            );
+            $this->assertEquals([
+                '\core\nonexistent_future_environment::check_future_composer',
+                '\core\nonexistent_future_environment::check_future_router',
+                'check_future_missing_file',
+                'check_nonexistent_future_upgradelib_fn',
+            ], $infos);
+        } finally {
+            if (file_exists($xmlpath)) {
+                unlink($xmlpath);
+            }
+        }
+    }
+
+    /**
+     * Test that missing custom checks for the current or older version still fail with error codes.
+     */
+    #[\PHPUnit\Framework\Attributes\RunInSeparateProcess]
+    public function test_environment_custom_checks_current_version_missing_errors(): void {
+        global $CFG;
+        require_once($CFG->libdir . '/environmentlib.php');
+
+        $this->resetAfterTest();
+        $xmlpath = $this->create_custom_checks_environment_xml();
+
+        try {
+            $results = environment_custom_checks('1.0', ENV_SELECT_DATAROOT);
+            $this->assertCount(2, $results);
+
+            $this->assertFalse($results[0]->is_skipped());
+            $this->assertFalse($results[0]->getStatus());
+            $this->assertSame(
+                '\core\nonexistent_current_environment::check_missing_fn',
+                $results[0]->getInfo()
+            );
+            $this->assertSame(CUSTOM_CHECK_FUNCTION_MISSING, $results[0]->getErrorCode());
+
+            $this->assertFalse($results[1]->is_skipped());
+            $this->assertFalse($results[1]->getStatus());
+            $this->assertSame('check_missing_file', $results[1]->getInfo());
+            $this->assertSame(CUSTOM_CHECK_FILE_MISSING, $results[1]->getErrorCode());
+
+            [$status, $envresults] = check_moodle_environment('1.0', ENV_SELECT_DATAROOT);
+            $this->assertFalse($status);
+            $this->assertNotEmpty(environment_get_errors($envresults));
+        } finally {
+            if (file_exists($xmlpath)) {
+                unlink($xmlpath);
+            }
+        }
     }
 }
