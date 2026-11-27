@@ -566,4 +566,63 @@ final class renderer_test extends \advanced_testcase {
 
         $this->assertStringNotContainsString(get_string('notificationsummarywarning', 'admin', 1), $output);
     }
+
+    /**
+     * Skipped future custom checks should appear in the Other checks table with an info badge and escaped info.
+     */
+    public function test_environment_check_table_displays_skipped_future_checks(): void {
+        global $CFG;
+        require_once($CFG->libdir . '/environmentlib.php');
+
+        $this->resetAfterTest();
+
+        $phpresult = new \environment_results('php');
+        $phpresult->setStatus(true);
+        $phpresult->setLevel('required');
+        $phpresult->setCurrentVersion('8.3.0');
+        $phpresult->setNeededVersion('8.3.0');
+
+        $warningresult = new \environment_results('custom_check');
+        $warningresult->setStatus(false);
+        $warningresult->setLevel('optional');
+        $warningresult->setInfo('optional_warning_check');
+
+        $skippedoptional = new \environment_results('custom_check');
+        $skippedoptional->setStatus(false);
+        $skippedoptional->setLevel('optional');
+        $skippedoptional->setInfo('\core\environment::check_composer_dependencies_installed');
+        $skippedoptional->set_skipped(true);
+        $skippedoptional->setFeedbackStr(['environmentfuturecustomcheckskipped', 'admin', '5.3']);
+
+        $skippedrequired = new \environment_results('custom_check');
+        $skippedrequired->setStatus(false);
+        $skippedrequired->setLevel('required');
+        $skippedrequired->setInfo('<script>future_check</script>');
+        $skippedrequired->set_skipped(true);
+        $skippedrequired->setFeedbackStr(['environmentfuturecustomcheckskipped', 'admin', '5.3']);
+
+        $results = [$phpresult, $warningresult, $skippedoptional, $skippedrequired];
+        $html = $this->get_renderer()->environment_check_table(true, $results);
+
+        $this->assertStringContainsString('id="otherserverstatus"', $html);
+        $this->assertStringContainsString('\core\environment::check_composer_dependencies_installed', $html);
+        $this->assertStringContainsString('&lt;script&gt;future_check&lt;/script&gt;', $html);
+        $this->assertStringNotContainsString('<script>future_check</script>', $html);
+        $this->assertStringContainsString(get_string('environmentskippedcustomcheck', 'admin'), $html);
+        $this->assertStringContainsString(get_string('environmentfuturecustomcheckskipped', 'admin', '5.3'), $html);
+        $this->assertStringContainsString(get_string('skipped'), $html);
+        $this->assertStringContainsString('badge text-bg-info', $html);
+        $this->assertStringContainsString('alert-info', $html);
+        $this->assertStringNotContainsString(get_string('environmenterrortodo', 'admin'), $html);
+        $this->assertStringNotContainsString(
+            'admin/environment/custom_check/\core\environment::check_composer_dependencies_installed',
+            $html
+        );
+
+        $warningpos = strpos($html, 'optional_warning_check');
+        $skippedpos = strpos($html, '\core\environment::check_composer_dependencies_installed');
+        $this->assertNotFalse($warningpos);
+        $this->assertNotFalse($skippedpos);
+        $this->assertLessThan($skippedpos, $warningpos);
+    }
 }

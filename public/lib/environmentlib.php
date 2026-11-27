@@ -105,6 +105,10 @@ function check_moodle_environment($version, $env_select = ENV_SELECT_NEWER) {
 /// or some error_code
     $result = true;
     foreach ($environment_results as $environment_result) {
+        // phpcs:ignore moodle.NamingConventions.ValidVariableName.VariableNameUnderscore
+        if ($environment_result->is_skipped() && !$environment_result->getErrorCode()) {
+            continue;
+        }
         if (!$environment_result->getStatus() && $environment_result->getLevel() == 'required'
           && !$environment_result->getBypassStr()) {
             $result = false; // required item that is not bypased
@@ -142,6 +146,12 @@ function environment_get_errors($environment_results) {
             $a->error_code = $error_code;
             $errors[] = array($info, get_string('environmentxmlerror', 'admin', $a));
             return $errors;
+        }
+
+        // phpcs:ignore moodle.NamingConventions.ValidVariableName.VariableNameUnderscore
+        if ($environment_result->is_skipped()) {
+            // Skipped future checks are informational only and not errors.
+            continue;
         }
 
         /// Calculate the status value
@@ -705,11 +715,12 @@ function environment_check_php_settings($version, $env_select) {
 function environment_custom_checks($version, $env_select) {
     global $CFG;
 
+    $version = normalize_version($version);
     $results = array();
 
 /// Get current Moodle version (release) for later compare
     $release = isset($CFG->release) ? $CFG->release : $version; /// In case $CFG fails (at install) use $version
-    $current_version = normalize_version($release);
+    $currentversion = normalize_version($release);
 
 /// Get the enviroment version we need
     if (!$data = get_environment_for_version($version, $env_select)) {
@@ -745,30 +756,20 @@ function environment_custom_checks($version, $env_select) {
                 $result->setLevel($level);
                 $result->setInfo($function);
                 $result = call_user_func($function, $result);
-            } else if (!$file or is_readable($file)) {
-            /// Only show error for current version (where function MUST exist)
-            /// else, we are performing custom checks against future versiosn
-            /// and function MAY not exist, so it doesn't cause error, just skip
-            /// custom check by returning null. MDL-15939
-                if (version_compare($current_version, $version, '>=')) {
-                    $result->setStatus(false);
-                    $result->setInfo($function);
-                    $result->setErrorCode(CUSTOM_CHECK_FUNCTION_MISSING);
-                } else {
-                    $result = null;
-                }
+            } else if (version_compare($currentversion, $version, '>=')) {
+                // Only show error for current or older version where the file and function must exist.
+                $result->setStatus(false);
+                $result->setInfo($function);
+                $errorcode = (!$file || is_readable($file)) ? CUSTOM_CHECK_FUNCTION_MISSING : CUSTOM_CHECK_FILE_MISSING;
+                $result->setErrorCode($errorcode);
             } else {
-            /// Only show error for current version (where function MUST exist)
-            /// else, we are performing custom checks against future versiosn
-            /// and function MAY not exist, so it doesn't cause error, just skip
-            /// custom check by returning null. MDL-15939
-                if (version_compare($current_version, $version, '>=')) {
-                    $result->setStatus(false);
-                    $result->setInfo($function);
-                    $result->setErrorCode(CUSTOM_CHECK_FILE_MISSING);
-                } else {
-                    $result = null;
-                }
+                // Checking against a future version where the file or function may not exist yet.
+                // Mark the check as skipped so it remains visible without blocking the upgrade.
+                $result->setLevel($level);
+                $result->setStatus(false);
+                $result->setInfo($function);
+                $result->set_skipped(true);
+                $result->setFeedbackStr(['environmentfuturecustomcheckskipped', 'admin', $version]);
             }
         } else {
             $result->setStatus(false);
@@ -776,10 +777,12 @@ function environment_custom_checks($version, $env_select) {
         }
 
         if (!is_null($result)) {
-        /// Do any actions defined in the XML file.
-            process_environment_result($check, $result);
+            // Do any actions defined in the XML file unless the check was skipped.
+            if (!$result->is_skipped()) {
+                process_environment_result($check, $result);
+            }
 
-        /// Add the result to the array of results
+            // Add the result to the array of results.
             $results[] = $result;
         }
     }
@@ -1294,6 +1297,12 @@ class environment_results {
      * @var string|null full plugin name or null if main environment
      */
     var $plugin = null;
+
+    /**
+     * @var bool True if the check was skipped because it cannot be run on the current Moodle version.
+     */
+    public bool $skipped = false;
+
     /**
      * Constructor of the environment_result class. Just set default values
      *
@@ -1407,6 +1416,16 @@ class environment_results {
     }
 
     /**
+     * Set whether the check was skipped.
+     *
+     * @param bool $skipped True if the check was skipped.
+     * @return void
+     */
+    public function set_skipped(bool $skipped): void {
+        $this->skipped = $skipped;
+    }
+
+    /**
      * Get the status
      *
      * @return bool true means the test passed and all is OK. false means it failed.
@@ -1497,6 +1516,15 @@ class environment_results {
      */
     function getRestrictStr() {
         return $this->restrict_str;
+    }
+
+    /**
+     * Get whether the check was skipped.
+     *
+     * @return bool True if the check was skipped.
+     */
+    public function is_skipped(): bool {
+        return $this->skipped;
     }
 
     /**
